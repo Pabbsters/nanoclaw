@@ -37,7 +37,7 @@ class PostingDB:
     def __init__(self, path: str = "postings.db") -> None:
         parent = os.path.dirname(os.path.abspath(path))
         os.makedirs(parent, exist_ok=True)
-        self._conn: Optional[sqlite3.Connection] = sqlite3.connect(path)
+        self._conn: Optional[sqlite3.Connection] = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._migrate()
 
