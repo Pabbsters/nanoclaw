@@ -108,7 +108,7 @@ GITHUB_REPOS: list[str] = [
     "speedyapply/2026-AI-College-Jobs",
 ]
 
-# ── Intern title regex patterns ────────────────────────────────────────
+# ── Intern / entry-level title patterns (must match one) ──────────────
 INTERN_TITLE_PATTERNS: list[str] = [
     r"\bintern\b",
     r"\binternship\b",
@@ -117,4 +117,31 @@ INTERN_TITLE_PATTERNS: list[str] = [
     r"\bfellow\b",
     r"\bresidency\b",
     r"\bapprentice\b",
+    r"\bnew grad\b",
+    r"\bnew-grad\b",
+    r"\bentry[- ]level\b",
+    r"\bearly career\b",
+    r"\bcampus hire\b",
+    r"\buniversity hire\b",
+    r"\brecent graduate\b",
+]
+
+# ── Title/description patterns that disqualify a posting ──────────────
+# These are roles above bachelor's level or requiring advanced degrees.
+EXCLUDE_PATTERNS: list[str] = [
+    r"\bphd\b",
+    r"\bph\.d\b",
+    r"\bdoctoral\b",
+    r"\bpostdoc\b",
+    r"\bpost-doc\b",
+    r"\bsenior\b",
+    r"\bstaff engineer\b",
+    r"\bprincipal engineer\b",
+    r"\bdirector\b",
+    r"\bvp of\b",
+    r"\bhead of\b",
+    r"\blead engineer\b",
+    r"\bmanager\b",
+    r"\b[5-9]\+\s*years\b",
+    r"\b[1-9][0-9]\+\s*years\b",
 ]
