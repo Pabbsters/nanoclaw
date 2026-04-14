@@ -3,7 +3,7 @@
 # Runs before Claude agent wakes — checks if scraper has new postings
 # If no new postings found, outputs wakeAgent=false to save tokens
 
-SCRAPER_URL="${SCRAPER_URL:-https://jojo-scraper.fly.dev}"
+SCRAPER_URL="${SCRAPER_URL:-http://178.104.199.240}"
 LAST_TS_FILE="/workspace/group/last_enrichment_ts"
 
 # Get timestamp of last enrichment (default: 12 hours ago)

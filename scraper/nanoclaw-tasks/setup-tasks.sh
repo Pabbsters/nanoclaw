@@ -1,10 +1,10 @@
 #!/bin/bash
 # Setup jojo NanoClaw scheduled tasks
-# Run this once after deploying the scraper to Fly.io
+# Run this once after deploying the scraper to Hetzner
 
 set -euo pipefail
 
-SCRAPER_URL="${SCRAPER_URL:-https://jojo-scraper.fly.dev}"
+SCRAPER_URL="${SCRAPER_URL:-http://178.104.199.240}"
 IPC_DIR="/Users/ruthwikpabbu/nanoclaw/data/ipc/discord_main/tasks"
 DISCORD_JID="discord_main"
 
@@ -13,7 +13,7 @@ mkdir -p "$IPC_DIR"
 # Inline enrichment pre-check script (runs before Claude wakes)
 # If no new postings since last enrichment, wakeAgent=false saves tokens
 ENRICHMENT_SCRIPT='#!/bin/bash
-SCRAPER_URL="${SCRAPER_URL:-https://jojo-scraper.fly.dev}"
+SCRAPER_URL="${SCRAPER_URL:-http://178.104.199.240}"
 LAST_TS_FILE="/workspace/group/last_enrichment_ts"
 if [ -f "$LAST_TS_FILE" ]; then
   SINCE=$(cat "$LAST_TS_FILE")
@@ -52,7 +52,7 @@ cat > "$IPC_DIR/newsletter_$(date +%s).json" << 'TASK2'
 {
   "type": "schedule_task",
   "taskId": "jojo-weekly-newsletter",
-  "prompt": "You are writing the weekly 'Jobs with Ruthwik' LinkedIn newsletter draft.\n\nRuthwik is a Stats + CS + Data Science student at UIUC. This newsletter covers tech recruiting, internship intel, and career advice. It MUST read like Ruthwik wrote it — natural, conversational, no AI tells.\n\nYour process:\n1. Read the scraper feed data from https://jojo-scraper.fly.dev/feed?since=604800 for this week's new postings.\n2. Read /workspace/extra/vault/intel/reddit-weekly.md for Reddit intel.\n3. Read /workspace/extra/vault/intel/market-trends.md for trends.\n\nNewsletter structure (800-1200 words):\n- **Hook**: One big insight or surprising trend from this week\n- **This Week's Top Opportunities**: 3-5 standout internship postings with why they matter\n- **Interview Intel**: What companies are asking right now (LeetCode patterns, behavioral questions)\n- **Market Pulse**: Hiring trends, layoffs, salary movements\n- **One Actionable Takeaway**: Something the reader can do THIS WEEK\n\nVoice guidelines:\n- Write as a fellow student sharing what you found, not as an authority lecturing\n- Use 'I found', 'I noticed', 'from what I'm seeing'\n- Include specific data points and numbers\n- Reference Reddit threads or community discussions naturally\n- Keep paragraphs short (2-3 sentences), use headers and bullets for scannability\n\nSave the draft to /workspace/extra/vault/newsletters/draft-$(date +%Y-%m-%d).md\n\nAlso send a Discord message saying: 'Newsletter draft for this week is ready. Review and post to LinkedIn when ready.'",
+  "prompt": "You are writing the weekly 'Jobs with Ruthwik' LinkedIn newsletter draft.\n\nRuthwik is a Stats + CS + Data Science student at UIUC. This newsletter covers tech recruiting, internship intel, and career advice. It MUST read like Ruthwik wrote it — natural, conversational, no AI tells.\n\nYour process:\n1. Read the scraper feed data from http://178.104.199.240/feed?since=604800 for this week's new postings.\n2. Read /workspace/extra/vault/intel/reddit-weekly.md for Reddit intel.\n3. Read /workspace/extra/vault/intel/market-trends.md for trends.\n\nNewsletter structure (800-1200 words):\n- **Hook**: One big insight or surprising trend from this week\n- **This Week's Top Opportunities**: 3-5 standout internship postings with why they matter\n- **Interview Intel**: What companies are asking right now (LeetCode patterns, behavioral questions)\n- **Market Pulse**: Hiring trends, layoffs, salary movements\n- **One Actionable Takeaway**: Something the reader can do THIS WEEK\n\nVoice guidelines:\n- Write as a fellow student sharing what you found, not as an authority lecturing\n- Use 'I found', 'I noticed', 'from what I'm seeing'\n- Include specific data points and numbers\n- Reference Reddit threads or community discussions naturally\n- Keep paragraphs short (2-3 sentences), use headers and bullets for scannability\n\nSave the draft to /workspace/extra/vault/newsletters/draft-$(date +%Y-%m-%d).md\n\nAlso send a Discord message saying: 'Newsletter draft for this week is ready. Review and post to LinkedIn when ready.'",
   "schedule_type": "cron",
   "schedule_value": "0 21 * * 0",
   "targetJid": "discord_main",
