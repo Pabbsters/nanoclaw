@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import time
 from typing import Optional
@@ -34,6 +35,8 @@ class PostingDB:
     """Thin wrapper around a SQLite database of seen job postings."""
 
     def __init__(self, path: str = "postings.db") -> None:
+        parent = os.path.dirname(os.path.abspath(path))
+        os.makedirs(parent, exist_ok=True)
         self._conn: Optional[sqlite3.Connection] = sqlite3.connect(path)
         self._conn.row_factory = sqlite3.Row
         self._migrate()
