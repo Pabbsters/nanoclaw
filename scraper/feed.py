@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -65,7 +66,7 @@ class FeedHandler(BaseHTTPRequestHandler):
         """Suppress default stderr logging."""
 
 
-def start_feed_server(db: PostingDB, port: int = 8080) -> HTTPServer:
+def start_feed_server(db: PostingDB, port: int = int(os.environ.get("PORT", "8080"))) -> HTTPServer:
     """Start the feed server in a background daemon thread."""
     FeedHandler.db = db
     server = HTTPServer(("0.0.0.0", port), FeedHandler)
