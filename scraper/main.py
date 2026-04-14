@@ -98,7 +98,7 @@ async def poll_github() -> None:
 
 async def poll_jobspy_wrapper() -> None:
     """JobSpy is sync - run in executor."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     postings = await loop.run_in_executor(None, jobspy_agg.poll_jobspy)
     await process_postings(postings, "jobspy")
 
@@ -128,10 +128,9 @@ async def poll_workday_feeds() -> None:
     await process_postings(postings, "workday")
 
 
-def main() -> None:
+async def _async_main() -> None:
     logger.info("Starting jojo-scraper")
 
-    # Start JSON feed server for NanoClaw
     start_feed_server(db)
     logger.info("Feed server started on port 8080")
 
@@ -158,16 +157,24 @@ def main() -> None:
     scheduler.start()
     logger.info("Scheduler started -- all sources armed")
 
-    # Run initial poll immediately (parallel)
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(asyncio.gather(
+    # Run initial poll — individual failures are logged, not raised
+    results = await asyncio.gather(
         poll_greenhouse(), poll_ashby(), poll_lever(),
         poll_github(), poll_amazon_jobs(), poll_apple_jobs(),
         poll_reddit_feeds(), poll_hn_feeds(),
-    ))
+        return_exceptions=True,
+    )
+    for r in results:
+        if isinstance(r, Exception):
+            logger.error("Initial poll error: %s", r)
     logger.info("Initial poll complete")
 
-    loop.run_forever()
+    # Keep running until interrupted
+    await asyncio.Event().wait()
+
+
+def main() -> None:
+    asyncio.run(_async_main())
 
 
 if __name__ == "__main__":

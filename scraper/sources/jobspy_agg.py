@@ -16,7 +16,7 @@ SEARCH_QUERIES: list[str] = [
     "quant intern",
 ]
 
-SITES: list[str] = ["indeed", "linkedin", "glassdoor", "google", "zip_recruiter"]
+SITES: list[str] = ["indeed", "google", "zip_recruiter"]
 
 
 def _normalize_row(row: dict) -> dict:
