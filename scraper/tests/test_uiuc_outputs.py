@@ -5,6 +5,8 @@ from __future__ import annotations
 from uiuc_outputs import (
     render_alumni_collector_markdown,
     render_alumni_patterns_markdown,
+    render_hidden_pathway_markdown,
+    render_pathways_markdown,
     render_playbook_markdown,
     render_queue_markdown,
     render_sources_markdown,
@@ -124,3 +126,45 @@ def test_render_alumni_collector_markdown_summarizes_provider_health() -> None:
     assert "Mode: `hybrid`" in markdown
     assert "**public**: `blocked`" in markdown
     assert "browser_assisted" in markdown
+
+
+def test_render_pathways_markdown_includes_hidden_routes() -> None:
+    markdown = render_pathways_markdown(
+        [
+            {
+                "title": "Illinois Machine Learning Seminar",
+                "hidden_pathway_score": 23,
+                "officiality": "official",
+                "pathway_recommended_action": "reach_out",
+                "description": "Seminar that repeatedly surfaces research-facing student involvement.",
+                "student_access_signals": ["student", "seminar", "presenters"],
+                "url": "https://publish.illinois.edu/ml-seminar/",
+            }
+        ]
+    )
+
+    assert "# UIUC Hidden Pathways" in markdown
+    assert "**Illinois Machine Learning Seminar**" in markdown
+    assert "Action: `reach_out`" in markdown
+
+
+def test_render_hidden_pathway_markdown_includes_pathway_details() -> None:
+    markdown = render_hidden_pathway_markdown(
+        {
+            "title": "NCSA SPIN",
+            "officiality": "official",
+            "pathway_kind": "program",
+            "hidden_pathway_score": 26,
+            "pathway_recommended_action": "reach_out",
+            "unit": "NCSA",
+            "department": "SPIN",
+            "description": "Student pathway into applied ML and research software work.",
+            "domain_tags": ["machine learning", "research"],
+            "student_access_signals": ["student", "apply"],
+            "url": "https://spin.ncsa.illinois.edu/",
+        }
+    )
+
+    assert "# NCSA SPIN" in markdown
+    assert "Officiality: `official`" in markdown
+    assert "Student access signals: student, apply" in markdown

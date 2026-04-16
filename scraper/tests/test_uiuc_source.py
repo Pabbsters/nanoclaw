@@ -6,6 +6,7 @@ from sources.uiuc import (
     parse_faculty_link_hub,
     parse_faculty_profile_page,
     parse_generic,
+    parse_hidden_pathway_page,
     parse_research_park_company_page,
     parse_research_park_sitemap,
     parse_self_page,
@@ -293,3 +294,59 @@ def test_parse_self_page_keeps_relevant_program_page() -> None:
     assert len(records) == 1
     assert records[0]["title"] == "Data Science Research Service"
     assert "machine learning" in records[0]["domain_tags"]
+
+
+def test_parse_hidden_pathway_page_keeps_official_research_route() -> None:
+    html = """
+    <html>
+      <head>
+        <title>Illinois Machine Learning Seminar | Illinois</title>
+        <meta name="description" content="Weekly seminar on machine learning, NLP, computer vision, and trustworthy AI with student presenters and research discussions." />
+      </head>
+      <body>
+        <p>Undergraduate and graduate students can join seminar discussions, present work, and connect with research labs.</p>
+      </body>
+    </html>
+    """
+    page = {
+        "source": "uiuc_ml_seminar",
+        "url": "https://publish.illinois.edu/ml-seminar/",
+        "entity_kind": "research_program",
+        "unit": "Siebel School of Computing and Data Science",
+        "department": "ML Seminar",
+        "officiality": "official",
+        "pathway_kind": "seminar",
+    }
+
+    records = parse_hidden_pathway_page(html, page)
+
+    assert len(records) == 1
+    assert records[0]["hidden_pathway_signal"] is True
+    assert records[0]["officiality"] == "official"
+    assert "machine learning" in records[0]["domain_tags"]
+    assert "seminar" in records[0]["student_access_signals"]
+
+
+def test_parse_hidden_pathway_page_filters_generic_social_group() -> None:
+    html = """
+    <html>
+      <head>
+        <title>Illinois Social Dance Club | Illinois</title>
+        <meta name="description" content="Join our social dance club for concerts, tailgates, and alumni weekend events." />
+      </head>
+      <body>
+        <p>Meet friends at fundraisers, tailgates, and social events all semester.</p>
+      </body>
+    </html>
+    """
+    page = {
+        "source": "dance_club",
+        "url": "https://example.com/dance",
+        "entity_kind": "research_program",
+        "unit": "Illinois",
+        "department": "Student Life",
+        "officiality": "affiliated",
+        "pathway_kind": "student_org",
+    }
+
+    assert parse_hidden_pathway_page(html, page) == []

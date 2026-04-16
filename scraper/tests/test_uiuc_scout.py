@@ -101,6 +101,35 @@ class TestNormalizeSourceRecord:
         assert result["track"] == "quant_fintech"
         assert "Jane Street" in result["company_archetypes"]
 
+    def test_hidden_pathway_record_can_become_outreach_target(self) -> None:
+        record = {
+            "source": "uiuc_ml_seminar",
+            "url": "https://publish.illinois.edu/ml-seminar/",
+            "entity_kind": "research_group",
+            "title": "Illinois Machine Learning Seminar",
+            "unit": "Siebel School",
+            "department": "ML Seminar",
+            "faculty": "",
+            "description": "Official Illinois seminar with machine learning, NLP, trustworthy AI, student presenters, and research lab connections.",
+            "contact": "",
+            "last_seen": "2026-04-16",
+            "status_hint": "unknown",
+            "domain_tags": ["machine learning", "nlp", "trustworthy ai", "seminar", "research"],
+            "hidden_pathway_signal": True,
+            "officiality": "official",
+            "pathway_kind": "seminar",
+            "student_access_signals": ["student", "seminar", "presenters"],
+            "hidden_pathway_score": 25,
+            "pathway_recommended_action": "reach_out",
+        }
+
+        result = normalize_source_record(record)
+
+        assert result is not None
+        assert result["type"] == "cold_outreach_target"
+        assert result["next_action"] == "reach_out"
+        assert "hidden_pathway_signals" in result
+
     def test_non_technical_campus_role_is_filtered_out(self) -> None:
         record = {
             "source": "campus_jobs",
@@ -221,3 +250,50 @@ class TestBuildOpportunitiesWithAlumniFeedback:
         assert opportunities[0]["type"] == "research_opening"
         assert opportunities[0]["evidence_sources"] == ["alumni"]
         assert opportunities[0]["alumni_evidence_count"] == 3
+
+    def test_hidden_pathway_boosts_related_opportunity_without_duplication(self) -> None:
+        records = [
+            {
+                "source": "ncsa_spin",
+                "url": "https://spin.ncsa.illinois.edu/",
+                "entity_kind": "research_program",
+                "title": "NCSA SPIN",
+                "unit": "NCSA",
+                "department": "SPIN",
+                "faculty": "",
+                "description": "Student program for machine learning research software and data systems work.",
+                "contact": "",
+                "last_seen": "2026-04-16",
+                "status_hint": "rolling",
+                "domain_tags": ["machine learning", "research software", "data systems"],
+            }
+        ]
+        hidden_pathway_records = [
+            {
+                "source": "uiuc_ml_pathway",
+                "url": "https://spin.ncsa.illinois.edu/",
+                "entity_kind": "research_program",
+                "title": "NCSA SPIN",
+                "unit": "NCSA",
+                "department": "SPIN",
+                "faculty": "",
+                "description": "Repeated Illinois student pathway into ML research and research engineering.",
+                "contact": "",
+                "last_seen": "2026-04-16",
+                "status_hint": "unknown",
+                "domain_tags": ["machine learning", "research engineer"],
+                "hidden_pathway_signal": True,
+                "officiality": "official",
+                "pathway_kind": "program",
+                "student_access_signals": ["student", "apply", "research"],
+                "hidden_pathway_score": 24,
+                "pathway_recommended_action": "reach_out",
+            }
+        ]
+
+        opportunities = build_opportunities(records, hidden_pathway_records=hidden_pathway_records)
+
+        assert len(opportunities) == 1
+        assert "hidden_pathways" in opportunities[0]["evidence_sources"]
+        assert "NCSA SPIN" in opportunities[0]["hidden_pathway_signals"]
+        assert opportunities[0]["score_components"]["pathway_leverage"] >= 12

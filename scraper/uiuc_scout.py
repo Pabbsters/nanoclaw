@@ -153,7 +153,7 @@ def _score_components(record: dict[str, Any], track: str, text: str, company_arc
     }[status]
     freshness = 7 if record.get("last_seen") else 4
 
-    return {
+    components = {
         "path_fit": path_fit,
         "skill_growth_fit": skill_growth_fit,
         "evidence_fit": evidence_fit,
@@ -163,6 +163,21 @@ def _score_components(record: dict[str, Any], track: str, text: str, company_arc
         "actionability": actionability,
         "freshness": freshness,
     }
+    if record.get("hidden_pathway_signal"):
+        officiality = str(record.get("officiality", "official"))
+        student_access_signals = list(record.get("student_access_signals", []))
+        components["pathway_leverage"] = min(12, 4 + len(student_access_signals) + len(company_archetypes))
+        components["hidden_route_value"] = min(
+            10,
+            4 + len(_matched_keywords(text, ML_AI_KEYWORDS if track == "ml_ai_research" else QUANT_KEYWORDS if track == "quant_fintech" else TECHNICAL_SWE_KEYWORDS)),
+        )
+        components["officiality"] = 8 if officiality == "official" else 5
+        components["repeat_signal_strength"] = int(record.get("pathway_repeat_signal", 1) or 1)
+        components["conversion_potential"] = min(
+            10,
+            3 + len(student_access_signals) + (2 if any(_contains_keyword(text, token) for token in ("join", "apply", "contact")) else 0),
+        )
+    return components
 
 
 def _next_action(opportunity_type: str, total_score: int, status: str, text: str, evidence_sources: list[str]) -> str:
@@ -200,6 +215,8 @@ def normalize_source_record(record: dict[str, Any]) -> dict[str, Any] | None:
     company_archetypes = _company_archetypes(text)
     score_components = _score_components(record, track, text, company_archetypes)
     total_score = sum(score_components.values())
+    if record.get("hidden_pathway_signal") and total_score < 72:
+        return None
     evidence_sources = list(record.get("evidence_sources", ["official" if str(record.get("source", "")).startswith("uiuc_alumni") is False else "alumni"]))
     next_action = _next_action(opportunity_type, total_score, status, text, evidence_sources)
     title = _clean_text(str(record.get("title", "")))
@@ -249,6 +266,7 @@ def normalize_source_record(record: dict[str, Any]) -> dict[str, Any] | None:
         "evidence_sources": evidence_sources,
         "alumni_patterns": list(record.get("alumni_patterns", [])),
         "alumni_evidence_count": int(record.get("alumni_evidence_count", 0) or 0),
+        "hidden_pathway_signals": list(record.get("hidden_pathway_signals", [])),
         "should_ping": total_score >= UIUC_PING_SCORE_THRESHOLD and next_action in {"apply_now", "reach_out"},
     }
 
@@ -264,12 +282,94 @@ def dedupe_opportunities(opportunities: list[dict[str, Any]]) -> list[dict[str, 
     return sorted(deduped.values(), key=lambda item: item.get("total_score", 0), reverse=True)
 
 
-def build_opportunities(records: list[dict[str, Any]], alumni_patterns: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+def _opportunity_text(opportunity: dict[str, Any]) -> str:
+    return _clean_text(
+        " ".join(
+            [
+                str(opportunity.get("title", "")),
+                str(opportunity.get("org", "")),
+                str(opportunity.get("department", "")),
+                str(opportunity.get("lab", "")),
+                str(opportunity.get("faculty_name", "")),
+                " ".join(opportunity.get("tags", []) or []),
+                str(opportunity.get("description", "")),
+            ]
+        )
+    ).lower()
+
+
+def _hidden_pathway_matches_opportunity(opportunity: dict[str, Any], record: dict[str, Any]) -> bool:
+    pathway_title = _clean_text(str(record.get("title", ""))).lower()
+    pathway_department = _clean_text(str(record.get("department", ""))).lower()
+    opportunity_text = _opportunity_text(opportunity)
+    if not pathway_title:
+        return False
+    if _contains_keyword(opportunity_text, pathway_title):
+        return True
+    return bool(pathway_department and _contains_keyword(opportunity_text, pathway_department))
+
+
+def apply_hidden_pathway_feedback(opportunities: list[dict[str, Any]], hidden_pathway_records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Boost opportunities using hidden-pathway signals without changing ping rules."""
+    enriched: list[dict[str, Any]] = []
+    for opportunity in opportunities:
+        matched_records = [
+            record for record in hidden_pathway_records
+            if _hidden_pathway_matches_opportunity(opportunity, record)
+        ]
+        score_components = dict(opportunity.get("score_components", {}))
+        if matched_records:
+            score_components["repeat_signal_strength"] = max(
+                int(score_components.get("repeat_signal_strength", 0) or 0),
+                min(10, len(matched_records) * 3),
+            )
+            score_components["pathway_leverage"] = max(
+                int(score_components.get("pathway_leverage", 0) or 0),
+                min(12, max(int(record.get("hidden_pathway_score", 0) or 0) // 2 for record in matched_records)),
+            )
+            score_components["officiality"] = max(
+                int(score_components.get("officiality", 0) or 0),
+                max(8 if str(record.get("officiality", "official")) == "official" else 5 for record in matched_records),
+            )
+            score_components["conversion_potential"] = max(
+                int(score_components.get("conversion_potential", 0) or 0),
+                min(10, sum(len(record.get("student_access_signals", [])) for record in matched_records)),
+            )
+
+        fit_reasons = list(opportunity.get("fit_reasons", []))
+        if matched_records:
+            fit_reasons.append(
+                f"Supported by Illinois pathway signals via {', '.join(record['title'] for record in matched_records[:3])}."
+            )
+
+        updated = {
+            **opportunity,
+            "score_components": score_components,
+            "total_score": sum(score_components.values()),
+            "fit_reasons": list(dict.fromkeys(fit_reasons)),
+            "evidence_sources": list(dict.fromkeys([*(opportunity.get("evidence_sources") or ["official"]), *(["hidden_pathways"] if matched_records else [])])),
+            "hidden_pathway_signals": [record["title"] for record in matched_records],
+        }
+        updated["should_ping"] = (
+            updated["total_score"] >= UIUC_PING_SCORE_THRESHOLD
+            and updated.get("next_action") in {"apply_now", "reach_out"}
+        )
+        enriched.append(updated)
+
+    return sorted(enriched, key=lambda item: item.get("total_score", 0), reverse=True)
+
+
+def build_opportunities(
+    records: list[dict[str, Any]],
+    alumni_patterns: list[dict[str, Any]] | None = None,
+    hidden_pathway_records: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     """Normalize, filter, sort, and enrich UIUC records."""
     normalized = [normalize_source_record(record) for record in records]
     kept = [opportunity for opportunity in normalized if opportunity is not None]
     deduped = dedupe_opportunities(kept)
-    return apply_alumni_feedback(deduped, alumni_patterns or [])
+    alumni_enriched = apply_alumni_feedback(deduped, alumni_patterns or [])
+    return apply_hidden_pathway_feedback(alumni_enriched, hidden_pathway_records or [])
 
 
 def select_ping_candidates(opportunities: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:

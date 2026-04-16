@@ -301,6 +301,59 @@ UIUC_SOURCE_PAGES: tuple[dict[str, object], ...] = (
     },
 )
 
+UIUC_HIDDEN_PATHWAY_PAGES: tuple[dict[str, object], ...] = (
+    {
+        "source": "office_undergrad_research_home",
+        "url": "https://undergradresearch.illinois.edu/",
+        "parser": "hidden_pathway",
+        "entity_kind": "research_program",
+        "unit": "Office of Undergraduate Research",
+        "department": "Illinois",
+        "officiality": "official",
+        "pathway_kind": "program",
+    },
+    {
+        "source": "uiuc_ml_seminar",
+        "url": "https://publish.illinois.edu/ml-seminar/",
+        "parser": "hidden_pathway",
+        "entity_kind": "research_group",
+        "unit": "UIUC",
+        "department": "Machine Learning Seminar",
+        "officiality": "official",
+        "pathway_kind": "seminar",
+    },
+    {
+        "source": "isur_program",
+        "url": "https://isur.engineering.illinois.edu/",
+        "parser": "hidden_pathway",
+        "entity_kind": "research_program",
+        "unit": "Grainger",
+        "department": "Illinois Scholars Undergraduate Research",
+        "officiality": "official",
+        "pathway_kind": "program",
+    },
+    {
+        "source": "illini_aerial_robotics",
+        "url": "https://one.illinois.edu/illiniaerialrobotics/",
+        "parser": "hidden_pathway",
+        "entity_kind": "research_group",
+        "unit": "UIUC",
+        "department": "Illini Aerial Robotics",
+        "officiality": "affiliated",
+        "pathway_kind": "technical_team",
+    },
+    {
+        "source": "irobotics",
+        "url": "https://irobotics.illinois.edu/",
+        "parser": "hidden_pathway",
+        "entity_kind": "research_group",
+        "unit": "UIUC",
+        "department": "iRobotics",
+        "officiality": "affiliated",
+        "pathway_kind": "technical_team",
+    },
+)
+
 UIUC_SEED_TARGETS: tuple[dict[str, object], ...] = (
     {
         "source": "uiuc_seed",

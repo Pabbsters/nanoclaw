@@ -12,7 +12,7 @@ from xml.etree import ElementTree
 
 import httpx
 
-from uiuc_config import UIUC_SEED_TARGETS, UIUC_SOURCE_PAGES
+from uiuc_config import UIUC_HIDDEN_PATHWAY_PAGES, UIUC_SEED_TARGETS, UIUC_SOURCE_PAGES
 
 
 LINK_RE = re.compile(r'<a[^>]+href="(?P<href>[^"]+)"[^>]*>(?P<label>.*?)</a>', re.IGNORECASE | re.DOTALL)
@@ -36,6 +36,14 @@ PROFILE_LINK_RE = re.compile(
 )
 SELF_PAGE_TARGET_RE = re.compile(
     r"\b(machine learning|artificial intelligence|computer vision|nlp|knowledge graph|deep learning|research|research engineer|data science|analytics|computational|optimization|time series|quant|fintech|autonomy|robotics|medicine|health|scientific computing)\b",
+    re.IGNORECASE,
+)
+HIDDEN_PATHWAY_TARGET_RE = re.compile(
+    r"\b(machine learning|artificial intelligence|computer vision|nlp|knowledge graph|deep learning|research engineer|research|scientific computing|data science|quant|fintech|trading|optimization|time series|autonomy|robotics|autonomous|seminar|undergraduate research|student team|competition)\b",
+    re.IGNORECASE,
+)
+HIDDEN_PATHWAY_NOISE_RE = re.compile(
+    r"\b(homecoming|dance|fundraiser|social|alumni weekend|ticket|tailgate|concert|spiritual|worship|marketing club|consulting club|fraternity|sorority)\b",
     re.IGNORECASE,
 )
 LAST_SOURCE_HEALTH: list[dict] = []
@@ -327,6 +335,114 @@ def parse_self_page(html: str, page: dict[str, str]) -> list[dict]:
     ]
 
 
+def _hidden_pathway_score(
+    combined: str,
+    title: str,
+    page: dict[str, object],
+    student_access_signals: list[str],
+    domain_tags: list[str],
+) -> tuple[int, str]:
+    officiality = str(page.get("officiality", "official"))
+    pathway_kind = str(page.get("pathway_kind", "program"))
+    score = 6 if officiality == "official" else 4
+    score += min(8, len(domain_tags) * 2)
+    score += min(6, len(student_access_signals))
+    if pathway_kind in {"program", "seminar"}:
+        score += 4
+    elif pathway_kind == "technical_team":
+        score += 3
+    if any(_contains_keyword(combined, token) for token in ("join", "apply", "students", "undergraduate", "presenters", "research expo")):
+        score += 3
+    if any(_contains_keyword(title.lower(), token) for token in ("seminar", "research", "undergraduate", "robotics", "autonomous")):
+        score += 2
+    recommended_action = "reach_out" if score >= 16 else "track"
+    return score, recommended_action
+
+
+def parse_hidden_pathway_page(html: str, page: dict[str, object]) -> list[dict]:
+    """Parse an Illinois-owned or Illinois-affiliated hidden pathway page."""
+    title_match = TITLE_RE.search(html)
+    title = _strip_html(title_match.group("title")) if title_match else str(page.get("source", "Illinois hidden pathway"))
+    title = (
+        title.replace("| Illinois", "")
+        .replace("| University of Illinois Urbana-Champaign", "")
+        .replace("| University of Illinois at Urbana Champaign", "")
+        .replace("| A publish.illinois.edu site", "")
+        .strip()
+    )
+    desc_match = META_DESCRIPTION_RE.search(html)
+    description = _strip_html(desc_match.group("desc")) if desc_match else ""
+    page_text = _strip_html(html)
+    combined = f"{title} {description} {page_text}".lower()
+
+    if not HIDDEN_PATHWAY_TARGET_RE.search(combined):
+        return []
+    if HIDDEN_PATHWAY_NOISE_RE.search(combined):
+        return []
+
+    keyword_pool = (
+        "machine learning",
+        "artificial intelligence",
+        "computer vision",
+        "nlp",
+        "knowledge graph",
+        "deep learning",
+        "research",
+        "research engineer",
+        "scientific computing",
+        "data science",
+        "quant",
+        "fintech",
+        "trading",
+        "optimization",
+        "time series",
+        "autonomy",
+        "robotics",
+        "autonomous",
+        "competition",
+        "seminar",
+    )
+    domain_tags = sorted({keyword for keyword in keyword_pool if _contains_keyword(combined, keyword)})
+    student_access_signals = sorted(
+        {
+            keyword
+            for keyword in ("student", "undergraduate", "join", "apply", "team", "members", "seminar", "research expo", "presenters")
+            if _contains_keyword(combined, keyword)
+        }
+    )
+    hidden_pathway_score, recommended_action = _hidden_pathway_score(
+        combined,
+        title,
+        page,
+        student_access_signals,
+        domain_tags,
+    )
+    pathway_summary = description or " ".join(page_text.split()[:90]).strip()
+
+    return [
+        {
+            "source": str(page["source"]),
+            "url": str(page["url"]),
+            "entity_kind": str(page["entity_kind"]),
+            "title": title,
+            "unit": str(page["unit"]),
+            "department": str(page["department"]),
+            "faculty": "",
+            "description": pathway_summary,
+            "contact": "",
+            "last_seen": "",
+            "status_hint": "rolling" if any(signal in student_access_signals for signal in ("apply", "join", "undergraduate", "student")) else "unknown",
+            "domain_tags": domain_tags,
+            "hidden_pathway_signal": True,
+            "officiality": str(page.get("officiality", "official")),
+            "pathway_kind": str(page.get("pathway_kind", "program")),
+            "student_access_signals": student_access_signals,
+            "hidden_pathway_score": hidden_pathway_score,
+            "pathway_recommended_action": recommended_action,
+        }
+    ]
+
+
 def parse_faculty_profile_page(html: str, url: str, page: dict[str, str]) -> dict | None:
     """Parse a faculty profile page and keep it only when the research matches target themes."""
     title_match = TITLE_RE.search(html)
@@ -419,6 +535,7 @@ PARSERS = {
     "research_park": parse_research_park,
     "generic": parse_generic,
     "self_page": parse_self_page,
+    "hidden_pathway": parse_hidden_pathway_page,
 }
 
 
@@ -540,7 +657,7 @@ async def poll_all() -> list[dict]:
     global LAST_SOURCE_HEALTH
     results = [dict(record) for record in UIUC_SEED_TARGETS]
     health_records: list[dict] = []
-    for page in UIUC_SOURCE_PAGES:
+    for page in [*UIUC_SOURCE_PAGES, *UIUC_HIDDEN_PATHWAY_PAGES]:
         try:
             page_results = await _fetch_page(page)
             results.extend(page_results)

@@ -8,26 +8,13 @@ import os
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+from config import POLL_INTERVAL_MINUTES
 from db import PostingDB
 from discord_alert import send_alert, send_uiuc_alert
 from feed import start_feed_server
 from matching import classify_posting
 from runtime_env import load_project_env
-from sources import (
-    amazon,
-    apple,
-    ashby,
-    github_repos,
-    greenhouse,
-    hn,
-    jobspy_agg,
-    lever,
-    netflix,
-    reddit,
-    smartrecruiters,
-    uiuc,
-    workday,
-)
+from sources import amazon, apple, ashby, greenhouse, lever, netflix, smartrecruiters, uiuc, workday, workday_api
 from uiuc_alumni import (
     build_alumni_patterns,
     build_source_records_from_alumni_patterns,
@@ -38,6 +25,21 @@ from uiuc_alumni_collector import get_last_collector_summary, run_alumni_collect
 from uiuc_config import UIUC_MAX_PINGS_PER_RUN
 from uiuc_outputs import sync_uiuc_outputs
 from uiuc_scout import build_opportunities, select_ping_candidates
+
+try:
+    from sources import google
+except ImportError:
+    google = None
+
+try:
+    from sources import talentbrew
+except ImportError:
+    talentbrew = None
+
+try:
+    from sources import airbnb
+except ImportError:
+    airbnb = None
 
 
 load_project_env()
@@ -51,12 +53,15 @@ logger = logging.getLogger("jojo")
 db = PostingDB(os.environ.get("DB_PATH", "postings.db"))
 
 
-async def process_postings(postings: list[dict], source: str) -> None:
+async def process_postings(
+    postings: list[dict],
+    source: str,
+) -> None:
     """Check each posting against DB, classify, store, and alert."""
     new_count = 0
     for posting in postings:
-        posting_id = str(posting.get("posting_id", ""))
-        company_slug = str(posting.get("company_slug", "unknown"))
+        posting_id = str(posting.get("posting_id", "")).strip()
+        company_slug = str(posting.get("company_slug", "unknown")).strip()
         if not posting_id or not db.is_new(source, company_slug, posting_id):
             continue
 
@@ -81,8 +86,8 @@ async def process_postings(postings: list[dict], source: str) -> None:
 
         try:
             await send_alert(posting)
-        except Exception as exc:
-            logger.error("Failed to send alert: %s", exc)
+        except Exception as e:
+            logger.error("Failed to send alert: %s", e)
 
         new_count += 1
 
@@ -90,7 +95,10 @@ async def process_postings(postings: list[dict], source: str) -> None:
         logger.info("[%s] %d new postings found and alerted", source, new_count)
 
 
-async def process_uiuc_records(records: list[dict], alumni_profile_records: list[dict] | None = None) -> None:
+async def process_uiuc_records(
+    records: list[dict],
+    alumni_profile_records: list[dict] | None = None,
+) -> None:
     """Normalize, store, alert, and export UIUC scout opportunities."""
     normalized_profiles = [
         profile
@@ -102,12 +110,31 @@ async def process_uiuc_records(records: list[dict], alumni_profile_records: list
     ]
     alumni_patterns = build_alumni_patterns(normalized_profiles)
     derived_records = build_source_records_from_alumni_patterns(alumni_patterns)
-    opportunities = build_opportunities([*records, *derived_records], alumni_patterns=alumni_patterns)
+    hidden_pathway_records = [
+        dict(record)
+        for record in records
+        if record.get("hidden_pathway_signal")
+    ]
+    queue_hidden_pathway_records = [
+        record
+        for record in hidden_pathway_records
+        if int(record.get("hidden_pathway_score", 0) or 0) >= 16
+    ]
+    official_records = [
+        dict(record)
+        for record in records
+        if not record.get("hidden_pathway_signal")
+    ]
+    opportunities = build_opportunities(
+        [*official_records, *queue_hidden_pathway_records, *derived_records],
+        alumni_patterns=alumni_patterns,
+        hidden_pathway_records=hidden_pathway_records,
+    )
     new_count = 0
     new_opportunities: list[dict] = []
 
     for opportunity in opportunities:
-        source = opportunity.get("source", "uiuc_scout")
+        source = str(opportunity.get("source", "uiuc_scout"))
         opportunity_id = str(opportunity.get("id", ""))
         if not opportunity_id or not db.is_new_uiuc(source, opportunity_id):
             continue
@@ -131,12 +158,16 @@ async def process_uiuc_records(records: list[dict], alumni_profile_records: list
             alumni_profiles=normalized_profiles,
             source_health=uiuc.get_last_source_health(),
             collector_summary=get_last_collector_summary(),
+            hidden_pathway_records=hidden_pathway_records,
         )
     except Exception as exc:
         logger.error("Failed to sync UIUC scout outputs: %s", exc)
 
     if new_count > 0:
         logger.info("[uiuc_scout] %d new opportunities found", new_count)
+
+
+# ── Poll functions for each source ────────────────────────────────────
 
 
 async def poll_greenhouse() -> None:
@@ -154,21 +185,30 @@ async def poll_lever() -> None:
     await process_postings(postings, "lever")
 
 
-async def poll_github() -> None:
-    postings = await github_repos.poll_all()
-    await process_postings(postings, "github")
-
-
-async def poll_jobspy_wrapper() -> None:
-    """JobSpy is sync, so run it in an executor."""
-    loop = asyncio.get_running_loop()
-    postings = await loop.run_in_executor(None, jobspy_agg.poll_jobspy)
-    await process_postings(postings, "jobspy")
-
-
 async def poll_amazon_jobs() -> None:
     postings = await amazon.poll_all()
     await process_postings(postings, "amazon")
+
+
+async def poll_google_jobs() -> None:
+    if google is None:
+        return
+    postings = await google.poll_all()
+    await process_postings(postings, "google")
+
+
+async def poll_talentbrew_jobs() -> None:
+    if talentbrew is None:
+        return
+    postings = await talentbrew.poll_all()
+    await process_postings(postings, "talentbrew")
+
+
+async def poll_airbnb_jobs() -> None:
+    if airbnb is None:
+        return
+    postings = await airbnb.poll_all()
+    await process_postings(postings, "airbnb")
 
 
 async def poll_apple_jobs() -> None:
@@ -176,29 +216,24 @@ async def poll_apple_jobs() -> None:
     await process_postings(postings, "apple")
 
 
-async def poll_reddit_feeds() -> None:
-    postings = await reddit.poll_all()
-    await process_postings(postings, "reddit")
-
-
-async def poll_hn_feeds() -> None:
-    postings = await hn.poll_all()
-    await process_postings(postings, "hn")
-
-
 async def poll_workday_feeds() -> None:
     postings = await workday.poll_all()
     await process_postings(postings, "workday")
 
 
-async def poll_smartrecruiters() -> None:
+async def poll_smartrecruiters_jobs() -> None:
     postings = await smartrecruiters.poll_all()
     await process_postings(postings, "smartrecruiters")
 
 
-async def poll_netflix() -> None:
+async def poll_netflix_jobs() -> None:
     postings = await netflix.poll_all()
     await process_postings(postings, "netflix")
+
+
+async def poll_workday_api_jobs() -> None:
+    postings = await workday_api.poll_all()
+    await process_postings(postings, "workday_api")
 
 
 async def poll_uiuc_scout() -> None:
@@ -233,48 +268,139 @@ async def _async_main() -> None:
 
     scheduler = AsyncIOScheduler()
 
-    scheduler.add_job(poll_greenhouse, "interval", minutes=15, id="greenhouse", next_run_time=None)
-    scheduler.add_job(poll_ashby, "interval", minutes=15, id="ashby", next_run_time=None)
-    scheduler.add_job(poll_lever, "interval", minutes=15, id="lever", next_run_time=None)
-    scheduler.add_job(poll_github, "interval", minutes=15, id="github", next_run_time=None)
-
-    scheduler.add_job(poll_jobspy_wrapper, "interval", minutes=30, id="jobspy", next_run_time=None)
-    scheduler.add_job(poll_amazon_jobs, "interval", minutes=30, id="amazon", next_run_time=None)
-    scheduler.add_job(poll_apple_jobs, "interval", minutes=30, id="apple", next_run_time=None)
-    scheduler.add_job(poll_smartrecruiters, "interval", minutes=30, id="smartrecruiters", next_run_time=None)
-    scheduler.add_job(poll_netflix, "interval", minutes=30, id="netflix", next_run_time=None)
-
-    scheduler.add_job(poll_reddit_feeds, "interval", minutes=60, id="reddit", next_run_time=None)
-    scheduler.add_job(poll_workday_feeds, "interval", minutes=60, id="workday", next_run_time=None)
-
-    scheduler.add_job(poll_hn_feeds, "interval", minutes=1440, id="hn", next_run_time=None)
-    scheduler.add_job(poll_uiuc_full_pipeline, "interval", minutes=1440, id="uiuc_alumni_collector", next_run_time=None)
-    scheduler.add_job(poll_uiuc_scout, "interval", minutes=240, id="uiuc_scout", next_run_time=None)
+    # Tier 1: Direct APIs - every 15 min
+    scheduler.add_job(
+        poll_greenhouse,
+        "interval",
+        minutes=POLL_INTERVAL_MINUTES["greenhouse"],
+        id="greenhouse",
+        next_run_time=None,
+    )
+    scheduler.add_job(
+        poll_ashby,
+        "interval",
+        minutes=POLL_INTERVAL_MINUTES["ashby"],
+        id="ashby",
+        next_run_time=None,
+    )
+    scheduler.add_job(
+        poll_lever,
+        "interval",
+        minutes=POLL_INTERVAL_MINUTES["lever"],
+        id="lever",
+        next_run_time=None,
+    )
+    scheduler.add_job(
+        poll_google_jobs,
+        "interval",
+        minutes=POLL_INTERVAL_MINUTES["google"],
+        id="google",
+        next_run_time=None,
+    ) if google is not None else None
+    scheduler.add_job(
+        poll_talentbrew_jobs,
+        "interval",
+        minutes=POLL_INTERVAL_MINUTES["talentbrew"],
+        id="talentbrew",
+        next_run_time=None,
+    ) if talentbrew is not None else None
+    scheduler.add_job(
+        poll_airbnb_jobs,
+        "interval",
+        minutes=POLL_INTERVAL_MINUTES["airbnb"],
+        id="airbnb",
+        next_run_time=None,
+    ) if airbnb is not None else None
+    scheduler.add_job(
+        poll_amazon_jobs,
+        "interval",
+        minutes=POLL_INTERVAL_MINUTES["amazon"],
+        id="amazon",
+        next_run_time=None,
+    )
+    scheduler.add_job(
+        poll_apple_jobs,
+        "interval",
+        minutes=POLL_INTERVAL_MINUTES["apple"],
+        id="apple",
+        next_run_time=None,
+    )
+    scheduler.add_job(
+        poll_workday_feeds,
+        "interval",
+        minutes=POLL_INTERVAL_MINUTES["workday"],
+        id="workday",
+        next_run_time=None,
+    )
+    scheduler.add_job(
+        poll_smartrecruiters_jobs,
+        "interval",
+        minutes=POLL_INTERVAL_MINUTES["smartrecruiters"],
+        id="smartrecruiters",
+        next_run_time=None,
+    )
+    scheduler.add_job(
+        poll_netflix_jobs,
+        "interval",
+        minutes=POLL_INTERVAL_MINUTES["netflix"],
+        id="netflix",
+        next_run_time=None,
+    )
+    scheduler.add_job(
+        poll_workday_api_jobs,
+        "interval",
+        minutes=POLL_INTERVAL_MINUTES["workday_api"],
+        id="workday_api",
+        next_run_time=None,
+    )
+    scheduler.add_job(
+        poll_uiuc_full_pipeline,
+        "interval",
+        minutes=1440,
+        id="uiuc_alumni_collector",
+        next_run_time=None,
+    )
+    scheduler.add_job(
+        poll_uiuc_scout,
+        "interval",
+        minutes=240,
+        id="uiuc_scout",
+        next_run_time=None,
+    )
 
     scheduler.start()
-    logger.info("Scheduler started -- all sources armed")
+    logger.info("Scheduler started -- direct careers sources armed")
 
-    results = await asyncio.gather(
+    # Run initial poll — individual failures are logged, not raised
+    initial_tasks = [
         poll_greenhouse(),
         poll_ashby(),
         poll_lever(),
-        poll_github(),
-        poll_jobspy_wrapper(),
         poll_amazon_jobs(),
         poll_apple_jobs(),
-        poll_smartrecruiters(),
-        poll_netflix(),
-        poll_reddit_feeds(),
-        poll_hn_feeds(),
         poll_workday_feeds(),
+        poll_smartrecruiters_jobs(),
+        poll_netflix_jobs(),
+        poll_workday_api_jobs(),
         poll_uiuc_full_pipeline(),
+    ]
+    if google is not None:
+        initial_tasks.append(poll_google_jobs())
+    if talentbrew is not None:
+        initial_tasks.append(poll_talentbrew_jobs())
+    if airbnb is not None:
+        initial_tasks.append(poll_airbnb_jobs())
+
+    results = await asyncio.gather(
+        *initial_tasks,
         return_exceptions=True,
     )
-    for result in results:
-        if isinstance(result, Exception):
-            logger.error("Initial poll error: %s", result)
+    for r in results:
+        if isinstance(r, Exception):
+            logger.error("Initial poll error: %s", r)
     logger.info("Initial poll complete")
 
+    # Keep running until interrupted
     await asyncio.Event().wait()
 
 

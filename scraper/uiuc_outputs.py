@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-from uiuc_config import UIUC_SEED_TARGETS, UIUC_SOURCE_PAGES
+from uiuc_config import UIUC_HIDDEN_PATHWAY_PAGES, UIUC_SEED_TARGETS, UIUC_SOURCE_PAGES
 
 
 def render_queue_markdown(opportunities: list[dict]) -> str:
@@ -58,6 +58,16 @@ def render_sources_markdown(alumni_patterns: list[dict] | None = None, source_he
         details: list[str] = [f"status `{status}`"]
         if page.get("max_profiles"):
             details.append(f"cap {page['max_profiles']}")
+        if records_found is not None:
+            details.append(f"{records_found} records")
+        lines.append(f"- **{page['source']}**: {page['url']} | " + " | ".join(details))
+
+    lines.extend(["", "## Hidden Pathways Pages", ""])
+    for page in UIUC_HIDDEN_PATHWAY_PAGES:
+        health = next((item for item in (source_health or []) if item.get("source") == page["source"]), None)
+        status = health.get("status") if health else "unknown"
+        records_found = health.get("records_found") if health else None
+        details = [f"status `{status}`", f"officiality `{page.get('officiality', 'official')}`"]
         if records_found is not None:
             details.append(f"{records_found} records")
         lines.append(f"- **{page['source']}**: {page['url']} | " + " | ".join(details))
@@ -137,6 +147,37 @@ def render_playbook_markdown(opportunities: list[dict], patterns: list[dict], al
     return "\n".join(lines).strip() + "\n"
 
 
+def render_pathways_markdown(hidden_pathway_records: list[dict]) -> str:
+    """Render ranked hidden Illinois pathways outside the main queue."""
+    lines = [
+        "# UIUC Hidden Pathways",
+        "",
+        "Illinois-owned and clearly Illinois-affiliated routes that can lead into research, technical internships, and stronger outreach targets.",
+        "",
+    ]
+    ranked = sorted(
+        hidden_pathway_records,
+        key=lambda record: int(record.get("hidden_pathway_score", 0) or 0),
+        reverse=True,
+    )
+    if not ranked:
+        lines.append("No hidden pathways captured yet.")
+        return "\n".join(lines).strip() + "\n"
+
+    for index, record in enumerate(ranked, start=1):
+        lines.extend(
+            [
+                f"{index}. **{record.get('title', 'Unnamed pathway')}**",
+                f"Score: `{record.get('hidden_pathway_score', 0)}` | Officiality: `{record.get('officiality', 'official')}` | Action: `{record.get('pathway_recommended_action', 'track')}`",
+                f"Why: {record.get('description', 'No description captured')}",
+                f"Signals: {', '.join(record.get('student_access_signals', [])) or 'None captured'}",
+                f"Link: {record.get('url', '')}",
+                "",
+            ]
+        )
+    return "\n".join(lines).strip() + "\n"
+
+
 def render_alumni_collector_markdown(summary: dict | None) -> str:
     """Render the latest alumni collector run summary."""
     lines = [
@@ -180,6 +221,7 @@ def sync_uiuc_outputs(
     alumni_profiles: list[dict] | None = None,
     source_health: list[dict] | None = None,
     collector_summary: dict | None = None,
+    hidden_pathway_records: list[dict] | None = None,
 ) -> None:
     """Write queue and source inventory into the configured Vault output directory."""
     resolved_dir = _resolve_output_dir(output_dir)
@@ -188,12 +230,14 @@ def sync_uiuc_outputs(
 
     alumni_patterns = alumni_patterns or []
     alumni_profiles = alumni_profiles or []
+    hidden_pathway_records = hidden_pathway_records or []
 
     _ensure_structure(resolved_dir)
     (resolved_dir / "queue.md").write_text(render_queue_markdown(opportunities), encoding="utf-8")
     (resolved_dir / "sources.md").write_text(render_sources_markdown(alumni_patterns, source_health), encoding="utf-8")
     (resolved_dir / "alumni-patterns.md").write_text(render_alumni_patterns_markdown(alumni_patterns), encoding="utf-8")
     (resolved_dir / "playbook.md").write_text(render_playbook_markdown(opportunities, alumni_patterns, alumni_profiles), encoding="utf-8")
+    (resolved_dir / "pathways.md").write_text(render_pathways_markdown(hidden_pathway_records), encoding="utf-8")
     (resolved_dir / "alumni-collector.md").write_text(render_alumni_collector_markdown(collector_summary), encoding="utf-8")
     (resolved_dir / "alumni_profiles_merged.json").write_text(json.dumps({"profiles": alumni_profiles}, indent=2), encoding="utf-8")
 
@@ -219,6 +263,12 @@ def sync_uiuc_outputs(
         slug = _slugify(profile.get("name", "profile"))
         profile_doc = render_alumni_profile_markdown(profile)
         (resolved_dir / "alumni" / f"{slug}.md").write_text(profile_doc, encoding="utf-8")
+
+    for record in hidden_pathway_records:
+        slug = _slugify(record.get("title", "pathway"))
+        pathway_doc = render_hidden_pathway_markdown(record)
+        (resolved_dir / "pathways" / f"{slug}.md").write_text(pathway_doc, encoding="utf-8")
+        (resolved_dir / "resources" / f"pathway-{slug}.md").write_text(pathway_doc, encoding="utf-8")
 
 
 def render_opportunity_markdown(opportunity: dict) -> str:
@@ -317,6 +367,35 @@ def render_alumni_profile_markdown(profile: dict) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
+def render_hidden_pathway_markdown(record: dict) -> str:
+    """Render one hidden Illinois pathway dossier."""
+    lines = [
+        f"# {record.get('title', 'Unnamed pathway')}",
+        "",
+        f"- Officiality: `{record.get('officiality', 'official')}`",
+        f"- Pathway kind: `{record.get('pathway_kind', 'program')}`",
+        f"- Hidden-pathway score: `{record.get('hidden_pathway_score', 0)}`",
+        f"- Recommended action: `{record.get('pathway_recommended_action', 'track')}`",
+        f"- Unit: {record.get('unit', 'UIUC')}",
+        f"- Department: {record.get('department', 'Illinois')}",
+        "",
+        "## Why It Matters",
+        "",
+        f"- {record.get('description', 'No description captured')}",
+        "",
+        "## Skill / Access Signals",
+        "",
+        f"- Tags: {', '.join(record.get('domain_tags', [])) or 'None captured'}",
+        f"- Student access signals: {', '.join(record.get('student_access_signals', [])) or 'None captured'}",
+        "",
+        "## Link",
+        "",
+        record.get("url", ""),
+        "",
+    ]
+    return "\n".join(lines).strip() + "\n"
+
+
 def _resolve_output_dir(output_dir: str | None = None) -> Path | None:
     if output_dir:
         return Path(output_dir).expanduser()
@@ -334,7 +413,7 @@ def _resolve_output_dir(output_dir: str | None = None) -> Path | None:
 
 def _ensure_structure(base_dir: Path) -> None:
     base_dir.mkdir(parents=True, exist_ok=True)
-    for name in ("openings", "labs", "outreach", "quant", "resources", "alumni"):
+    for name in ("openings", "labs", "outreach", "quant", "resources", "alumni", "pathways"):
         (base_dir / name).mkdir(parents=True, exist_ok=True)
 
 
