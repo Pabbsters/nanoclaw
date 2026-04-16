@@ -302,8 +302,10 @@ def test_parse_hidden_pathway_page_keeps_official_research_route() -> None:
       <head>
         <title>Illinois Machine Learning Seminar | Illinois</title>
         <meta name="description" content="Weekly seminar on machine learning, NLP, computer vision, and trustworthy AI with student presenters and research discussions." />
+        <style>.wp-block-cover{display:flex}</style>
       </head>
       <body>
+        <script>function themeInit(){ return true; }</script>
         <p>Undergraduate and graduate students can join seminar discussions, present work, and connect with research labs.</p>
       </body>
     </html>
@@ -325,6 +327,7 @@ def test_parse_hidden_pathway_page_keeps_official_research_route() -> None:
     assert records[0]["officiality"] == "official"
     assert "machine learning" in records[0]["domain_tags"]
     assert "seminar" in records[0]["student_access_signals"]
+    assert "wp-block-cover" not in records[0]["description"]
 
 
 def test_parse_hidden_pathway_page_filters_generic_social_group() -> None:
@@ -350,3 +353,35 @@ def test_parse_hidden_pathway_page_filters_generic_social_group() -> None:
     }
 
     assert parse_hidden_pathway_page(html, page) == []
+
+
+def test_parse_hidden_pathway_page_uses_paragraph_fallback_for_summary() -> None:
+    html = """
+    <html>
+      <head>
+        <title>Illinois Scholars Undergraduate Research Program | Illinois</title>
+        <style>.wp-block-cover{display:flex}</style>
+      </head>
+      <body>
+        <script>function OptanonWrapper() { }</script>
+        <p>The Illinois Scholars Undergraduate Research program helps undergraduates find research mentors and build strong application materials.</p>
+        <p>Students can join workshops, connect with labs, and explore long-term ML and data science pathways.</p>
+      </body>
+    </html>
+    """
+    page = {
+        "source": "isur_program",
+        "url": "https://isur.engineering.illinois.edu/",
+        "entity_kind": "research_program",
+        "unit": "Grainger",
+        "department": "ISUR",
+        "officiality": "official",
+        "pathway_kind": "program",
+    }
+
+    records = parse_hidden_pathway_page(html, page)
+
+    assert len(records) == 1
+    assert records[0]["description"].startswith("The Illinois Scholars Undergraduate Research program")
+    assert "OptanonWrapper" not in records[0]["description"]
+    assert "wp-block-cover" not in records[0]["description"]

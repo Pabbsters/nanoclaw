@@ -17,6 +17,8 @@ from uiuc_config import UIUC_HIDDEN_PATHWAY_PAGES, UIUC_SEED_TARGETS, UIUC_SOURC
 
 LINK_RE = re.compile(r'<a[^>]+href="(?P<href>[^"]+)"[^>]*>(?P<label>.*?)</a>', re.IGNORECASE | re.DOTALL)
 TAG_RE = re.compile(r"<[^>]+>")
+SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
+PARAGRAPH_RE = re.compile(r"<p\b[^>]*>(?P<body>.*?)</p>", re.IGNORECASE | re.DOTALL)
 INCLUDE_TITLE_RE = re.compile(
     r"\b(research experiences for undergraduates|reu|opportunit|intern|internship|fellowship|program|faculty and student opportunities|undergraduate research|research conference)\b",
     re.IGNORECASE,
@@ -51,6 +53,22 @@ LAST_SOURCE_HEALTH: list[dict] = []
 
 def _strip_html(value: str) -> str:
     return unescape(TAG_RE.sub(" ", value or "")).strip()
+
+
+def _clean_page_text(value: str) -> str:
+    return _strip_html(SCRIPT_STYLE_RE.sub(" ", value or ""))
+
+
+def _extract_summary_paragraphs(value: str, limit: int = 3) -> str:
+    snippets: list[str] = []
+    for match in PARAGRAPH_RE.finditer(value or ""):
+        snippet = _strip_html(match.group("body"))
+        if len(snippet.split()) < 6:
+            continue
+        snippets.append(snippet)
+        if len(snippets) >= limit:
+            break
+    return " ".join(snippets).strip()
 
 
 def _keyword_pattern(keyword: str) -> re.Pattern[str]:
@@ -290,7 +308,7 @@ def parse_self_page(html: str, page: dict[str, str]) -> list[dict]:
     )
     desc_match = META_DESCRIPTION_RE.search(html)
     description = _strip_html(desc_match.group("desc")) if desc_match else ""
-    page_text = _strip_html(html)
+    page_text = _clean_page_text(html)
     combined = f"{title} {description} {page_text}".lower()
     if not SELF_PAGE_TARGET_RE.search(combined):
         return []
@@ -417,7 +435,7 @@ def parse_hidden_pathway_page(html: str, page: dict[str, object]) -> list[dict]:
         student_access_signals,
         domain_tags,
     )
-    pathway_summary = description or " ".join(page_text.split()[:90]).strip()
+    pathway_summary = description or _extract_summary_paragraphs(html) or " ".join(page_text.split()[:90]).strip()
 
     return [
         {
