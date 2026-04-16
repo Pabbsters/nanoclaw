@@ -44,6 +44,18 @@ class TestTableCreation:
         )
         assert cursor.fetchone() is not None
 
+    def test_uiuc_table_exists(self, db):
+        cursor = db._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='uiuc_opportunities'"
+        )
+        assert cursor.fetchone() is not None
+
+    def test_uiuc_index_exists(self, db):
+        cursor = db._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_uiuc_seen_at'"
+        )
+        assert cursor.fetchone() is not None
+
 
 # ── is_new / mark_seen ────────────────────────────────────────────────
 
@@ -153,3 +165,179 @@ class TestClose:
     def test_close_is_idempotent(self, db):
         db.close()
         db.close()  # Should not raise
+
+
+# ── UIUC scout persistence ────────────────────────────────────────────
+
+class TestUiucScoutPersistence:
+
+    def test_new_uiuc_opportunity_is_new(self, db):
+        assert db.is_new_uiuc("uiuc_seed", "bo-li-trustworthy-ai") is True
+
+    def test_mark_uiuc_seen_and_read_back(self, db):
+        opportunity = {
+            "id": "uiuc-ml-compiler",
+            "title": "Machine Learning Compiler Intern",
+            "url": "https://researchpark.illinois.edu/job/ml-compiler/",
+            "type": "uiuc_technical_opening",
+            "track": "ml_ai_research",
+            "org": "Research Park",
+            "department": "Research Park",
+            "lab": "",
+            "faculty_name": "",
+            "status": "open",
+            "next_action": "apply_now",
+            "total_score": 88,
+            "company_archetypes": ["Nvidia", "Waymo"],
+            "skills": ["Python", "ML systems"],
+            "tags": ["machine learning", "compiler"],
+            "fit_reasons": ["Matches ML infra direction"],
+            "score_components": {"path_fit": 19, "student_accessibility": 10},
+            "contact_info": {"email": "", "url": "https://researchpark.illinois.edu/job/ml-compiler/"},
+            "description": "Compiler work for ML workloads.",
+            "evidence_sources": ["official", "alumni"],
+            "alumni_patterns": ["NCSA SPIN"],
+            "alumni_evidence_count": 2,
+            "should_ping": True,
+        }
+
+        db.mark_uiuc_seen("uiuc_jobs", opportunity)
+
+        assert db.is_new_uiuc("uiuc_jobs", "uiuc-ml-compiler") is False
+
+        rows = db.get_recent_uiuc(limit=1)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["title"] == "Machine Learning Compiler Intern"
+        assert row["track"] == "ml_ai_research"
+        assert row["type"] == "uiuc_technical_opening"
+        assert row["should_ping"] is True
+        assert row["company_archetypes"] == ["Nvidia", "Waymo"]
+        assert row["score_components"]["path_fit"] == 19
+        assert row["evidence_sources"] == ["official", "alumni"]
+        assert row["alumni_patterns"] == ["NCSA SPIN"]
+        assert row["alumni_evidence_count"] == 2
+
+    def test_get_uiuc_feed_since_returns_only_recent(self, db):
+        old = {
+            "id": "bo-li-lab",
+            "title": "Bo Li Trustworthy AI Lab",
+            "url": "https://example.com/bo-li",
+            "type": "cold_outreach_target",
+            "track": "ml_ai_research",
+            "org": "UIUC",
+            "department": "CS",
+            "lab": "Trustworthy AI Lab",
+            "faculty_name": "Bo Li",
+            "status": "closed_but_outreachable",
+            "next_action": "reach_out",
+            "total_score": 81,
+            "company_archetypes": ["Anthropic"],
+            "skills": ["ML", "Robustness"],
+            "tags": ["trustworthy ai"],
+            "fit_reasons": ["Matches trustworthy AI interest"],
+            "score_components": {"path_fit": 18},
+            "contact_info": {"email": "lbo@illinois.edu"},
+            "description": "Research on trustworthy AI.",
+            "evidence_sources": ["official"],
+            "alumni_patterns": [],
+            "alumni_evidence_count": 0,
+            "should_ping": False,
+        }
+        new = {
+            **old,
+            "id": "quant-lab",
+            "title": "Quant Research Group",
+            "url": "https://example.com/quant",
+            "track": "quant_fintech",
+            "tags": ["quant", "time series"],
+        }
+
+        db.mark_uiuc_seen("uiuc_seed", old)
+        cutoff = time.time()
+        time.sleep(0.05)
+        db.mark_uiuc_seen("uiuc_seed", new)
+
+        rows = db.get_uiuc_feed_since(cutoff)
+        assert len(rows) == 1
+        assert rows[0]["id"] == "quant-lab"
+
+    def test_refresh_uiuc_snapshot_prunes_stale_rows_and_preserves_existing_seen_at(self, db):
+        existing = {
+            "id": "bo-li-lab",
+            "title": "Bo Li Trustworthy AI Lab",
+            "url": "https://example.com/bo-li",
+            "type": "cold_outreach_target",
+            "track": "ml_ai_research",
+            "org": "UIUC",
+            "department": "CS",
+            "lab": "Trustworthy AI Lab",
+            "faculty_name": "Bo Li",
+            "status": "rolling",
+            "next_action": "reach_out",
+            "total_score": 99,
+            "company_archetypes": ["Anthropic"],
+            "skills": ["ML"],
+            "tags": ["trustworthy ai"],
+            "fit_reasons": ["Matches trustworthy AI interest"],
+            "score_components": {"path_fit": 20},
+            "contact_info": {"email": "lbo@illinois.edu"},
+            "description": "Research on trustworthy AI.",
+            "evidence_sources": ["official"],
+            "alumni_patterns": [],
+            "alumni_evidence_count": 0,
+            "should_ping": True,
+        }
+        stale = {
+            **existing,
+            "id": "stale-item",
+            "title": "Stale Item",
+            "url": "https://example.com/stale",
+        }
+        refreshed = {
+            **existing,
+            "total_score": 104,
+            "fit_reasons": ["Matches trustworthy AI interest", "Still active in refreshed snapshot"],
+        }
+        new = {
+            **existing,
+            "id": "victor-duarte",
+            "title": "Victor Duarte Quant Lab",
+            "url": "https://example.com/victor",
+            "track": "quant_fintech",
+            "tags": ["quant", "time series"],
+        }
+
+        db.mark_uiuc_seen("uiuc_seed", existing)
+        time.sleep(0.05)
+        db.mark_uiuc_seen("research_park_sitemap", stale)
+        original_seen_at = db.get_recent_uiuc(limit=2)[1]["seen_at"]
+
+        cutoff = time.time()
+        time.sleep(0.05)
+        db.refresh_uiuc_snapshot(
+            [
+                {"source": "uiuc_seed", **refreshed},
+                {"source": "uiuc_seed", **new},
+            ]
+        )
+
+        rows = db.get_recent_uiuc(limit=10)
+        ids = {row["id"] for row in rows}
+        assert ids == {"bo-li-lab", "victor-duarte"}
+
+        bo_li = next(row for row in rows if row["id"] == "bo-li-lab")
+        victor = next(row for row in rows if row["id"] == "victor-duarte")
+        assert bo_li["seen_at"] == original_seen_at
+        assert bo_li["total_score"] == 104
+        assert victor["seen_at"] >= cutoff
+
+    def test_migrate_adds_new_alumni_columns(self, db):
+        columns = {
+            row["name"]
+            for row in db._conn.execute("PRAGMA table_info(uiuc_opportunities)").fetchall()
+        }
+
+        assert "evidence_sources" in columns
+        assert "alumni_patterns" in columns
+        assert "alumni_evidence_count" in columns

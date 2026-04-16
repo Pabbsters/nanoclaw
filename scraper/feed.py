@@ -22,6 +22,8 @@ class FeedHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/feed" or parsed.path.startswith("/feed"):
             self._handle_feed(parsed.query)
+        elif parsed.path == "/uiuc-feed" or parsed.path.startswith("/uiuc-feed"):
+            self._handle_uiuc_feed(parsed.query)
         elif parsed.path == "/health":
             self._handle_health()
         else:
@@ -45,6 +47,30 @@ class FeedHandler(BaseHTTPRequestHandler):
             return
 
         postings = self.db.get_feed_since(since_ts)
+        body = {
+            "postings": postings,
+            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        self._send_json(200, body)
+
+    def _handle_uiuc_feed(self, query: str) -> None:
+        """Return UIUC opportunities since a given timestamp (default 24h ago)."""
+        params = parse_qs(query)
+        since_raw = params.get("since", [None])[0]
+
+        if since_raw is not None:
+            try:
+                since_ts = float(since_raw)
+            except (ValueError, TypeError):
+                since_ts = time.time() - 86400
+        else:
+            since_ts = time.time() - 86400
+
+        if self.db is None:
+            self._send_json(500, {"error": "database not initialized"})
+            return
+
+        postings = self.db.get_uiuc_feed_since(since_ts)
         body = {
             "postings": postings,
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

@@ -119,6 +119,25 @@ class TestFeedEndpoint:
         assert status == 500
         assert "error" in body
 
+    def test_uiuc_feed_returns_uiuc_opportunities(self) -> None:
+        mock_db = MagicMock()
+        mock_db.get_uiuc_feed_since.return_value = [
+            {
+                "id": "bo-li-lab",
+                "title": "Bo Li - Trustworthy AI",
+                "track": "ml_ai_research",
+                "type": "cold_outreach_target",
+            }
+        ]
+
+        _, wfile = _make_handler("/uiuc-feed?since=1700000000", db=mock_db)
+        status, body = _parse_response(wfile)
+
+        assert status == 200
+        assert len(body["postings"]) == 1
+        assert body["postings"][0]["track"] == "ml_ai_research"
+        mock_db.get_uiuc_feed_since.assert_called_once_with(1700000000.0)
+
 
 class TestHealthEndpoint:
     """Test /health endpoint."""
@@ -145,9 +164,12 @@ class TestStartFeedServer:
 
     def test_starts_and_returns_server(self) -> None:
         mock_db = MagicMock()
-        server = start_feed_server(mock_db, port=0)  # port 0 = OS picks
-        try:
-            assert isinstance(server, HTTPServer)
-            assert FeedHandler.db is mock_db
-        finally:
-            server.shutdown()
+        fake_server = MagicMock(spec=HTTPServer)
+
+        with patch("feed.HTTPServer", return_value=fake_server) as mock_server_cls, patch("feed.threading.Thread") as mock_thread_cls:
+            server = start_feed_server(mock_db, port=0)
+
+        assert server is fake_server
+        assert FeedHandler.db is mock_db
+        mock_server_cls.assert_called_once_with(("0.0.0.0", 0), FeedHandler)
+        mock_thread_cls.assert_called_once()
