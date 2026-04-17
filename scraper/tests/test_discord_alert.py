@@ -11,8 +11,10 @@ from config import TRACK_EMOJI
 from discord_alert import (
     _resolve_uiuc_discord_channel_id,
     format_alert,
+    format_uiuc_constant_template_alert,
     format_uiuc_alert,
     send_alert,
+    send_uiuc_constant_template_alert,
     send_uiuc_alert,
 )
 
@@ -160,6 +162,12 @@ class TestFormatUiucAlert:
             "alumni_patterns": ["Bo Li Lab"],
             "company_archetypes": ["Anthropic"],
             "url": "https://example.com/bo-li",
+            "email_quality": "send_ready",
+            "email_intro": "My name is Ruthwik Pabbu.",
+            "email_observation_paragraph": "I became interested in your work after reading about trustworthy AI and privacy.",
+            "email_hook_source": "official_bio",
+            "email_skill_alignment": ["Python", "machine learning"],
+            "outreach_doc_path": "/Users/ruthwikpabbu/Vault/NanoClaw/uiuc-scout/outreach/bo-li.md",
         }
 
         result = format_uiuc_alert(opportunity)
@@ -172,6 +180,41 @@ class TestFormatUiucAlert:
         assert "Alumni signals: Bo Li Lab" in result
         assert "Mirrors: Anthropic" in result
         assert "Why: Trustworthy AI fit" in result
+        assert "Email quality: send_ready" in result
+        assert "Email intro: My name is Ruthwik Pabbu." in result
+        assert "Email opener: I became interested in your work after reading about trustworthy AI and privacy." in result
+        assert "Hook source: official_bio" in result
+        assert "Skills to mention: Python, machine learning" in result
+        assert "Full draft: /Users/ruthwikpabbu/Vault/NanoClaw/uiuc-scout/outreach/bo-li.md" in result
+
+    def test_formats_constant_template_alert(self) -> None:
+        result = format_uiuc_constant_template_alert("Reusable second paragraph.")
+
+        assert result.startswith("📌 **UIUC Scout Outreach Constant Paragraph**")
+        assert "Reusable second paragraph." in result
+
+    def test_formats_review_warning_for_needs_review_outreach(self) -> None:
+        result = format_uiuc_alert(
+            {
+                "title": "Victor Duarte - Quantitative Finance and Machine Learning",
+                "type": "cold_outreach_target",
+                "track": "quant_fintech",
+                "org": "UIUC",
+                "department": "Gies",
+                "total_score": 110,
+                "next_action": "reach_out",
+                "fit_reasons": ["Quant fit"],
+                "evidence_sources": ["official"],
+                "url": "https://example.com/victor-duarte",
+                "email_quality": "needs_review",
+                "email_intro": "My name is Ruthwik Pabbu.",
+                "email_observation_paragraph": "I became interested in your research after reading about your work in machine learning and optimization.",
+                "email_review_reason": "Hook is based on broad topic tags rather than a specific official research summary.",
+            }
+        )
+
+        assert "Email quality: needs_review" in result
+        assert "Review before sending: Hook is based on broad topic tags rather than a specific official research summary." in result
 
 
 class TestResolveUiucDiscordChannelId:
@@ -243,6 +286,44 @@ class TestSendUiucAlertFallback:
         assert called_url == "https://discord.com/api/v10/channels/1234567890/messages"
         assert called_headers["Authorization"] == "Bot test-bot-token"
 
+    @pytest.mark.asyncio
+    async def test_send_uiuc_constant_template_alert_uses_webhook(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.example/webhook")
+        mock_response = MagicMock()
+        mock_response.status_code = 204
+        mock_response.raise_for_status.return_value = None
+
+        with patch("discord_alert.httpx.AsyncClient.post", new=AsyncMock(return_value=mock_response)) as mock_post:
+            await send_uiuc_constant_template_alert("Reusable second paragraph.")
+
+        assert mock_post.await_count == 1
+        assert mock_post.await_args.args[0] == "https://discord.example/webhook"
+
+    @pytest.mark.asyncio
+    async def test_send_uiuc_constant_template_alert_retries_after_rate_limit(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.example/webhook")
+
+        rate_limited = MagicMock()
+        rate_limited.status_code = 429
+        rate_limited.headers = {}
+        rate_limited.json.return_value = {"retry_after": 0}
+
+        success = MagicMock()
+        success.status_code = 204
+        success.raise_for_status.return_value = None
+
+        with (
+            patch("discord_alert.httpx.AsyncClient.post", new=AsyncMock(side_effect=[rate_limited, success])) as mock_post,
+            patch("discord_alert.asyncio.sleep", new=AsyncMock()) as mock_sleep,
+        ):
+            await send_uiuc_constant_template_alert("Reusable second paragraph.")
+
+        assert mock_post.await_count == 2
+        assert mock_sleep.await_count == 1
+
 
 class TestSendAlertWebhook:
     """Webhook sends should read the current env value at send-time."""
@@ -251,6 +332,7 @@ class TestSendAlertWebhook:
     async def test_send_alert_uses_webhook_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.example/webhook")
         mock_response = MagicMock()
+        mock_response.status_code = 204
         mock_response.raise_for_status.return_value = None
 
         with patch("discord_alert.httpx.AsyncClient.post", new=AsyncMock(return_value=mock_response)) as mock_post:
@@ -273,6 +355,7 @@ class TestSendAlertWebhook:
         monkeypatch.setenv("UIUC_SCOUT_DISCORD_CHANNEL_ID", "1234567890")
 
         mock_response = MagicMock()
+        mock_response.status_code = 204
         mock_response.raise_for_status.return_value = None
 
         with patch("discord_alert.httpx.AsyncClient.post", new=AsyncMock(return_value=mock_response)) as mock_post:

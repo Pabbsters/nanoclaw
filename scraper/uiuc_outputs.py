@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 from uiuc_config import UIUC_HIDDEN_PATHWAY_PAGES, UIUC_SEED_TARGETS, UIUC_SOURCE_PAGES
+from uiuc_outreach import build_constant_template_markdown
 
 
 def render_queue_markdown(opportunities: list[dict]) -> str:
@@ -240,6 +241,10 @@ def sync_uiuc_outputs(
     (resolved_dir / "pathways.md").write_text(render_pathways_markdown(hidden_pathway_records), encoding="utf-8")
     (resolved_dir / "alumni-collector.md").write_text(render_alumni_collector_markdown(collector_summary), encoding="utf-8")
     (resolved_dir / "alumni_profiles_merged.json").write_text(json.dumps({"profiles": alumni_profiles}, indent=2), encoding="utf-8")
+    (resolved_dir / "email-template-constant.md").write_text(
+        build_constant_template_markdown(resolved_dir),
+        encoding="utf-8",
+    )
 
     for opportunity in opportunities:
         slug = _slugify(opportunity.get("title", opportunity.get("id", "opportunity")))
@@ -271,6 +276,38 @@ def sync_uiuc_outputs(
         (resolved_dir / "resources" / f"pathway-{slug}.md").write_text(pathway_doc, encoding="utf-8")
 
 
+def write_outreach_backfill(opportunities: list[dict], output_dir: str | None = None) -> None:
+    """Write only cold-outreach dossiers and the shared constant template."""
+    resolved_dir = _resolve_output_dir(output_dir)
+    if resolved_dir is None:
+        return
+
+    _ensure_structure(resolved_dir)
+    (resolved_dir / "email-template-constant.md").write_text(
+        build_constant_template_markdown(resolved_dir),
+        encoding="utf-8",
+    )
+
+    for opportunity in opportunities:
+        if opportunity.get("type") != "cold_outreach_target":
+            continue
+
+        slug = _slugify(opportunity.get("title", opportunity.get("id", "opportunity")))
+        dossier = render_opportunity_markdown(opportunity)
+        default_lab_path = resolved_dir / "labs" / f"{slug}.md"
+        lab_path = Path(opportunity.get("lab_doc_path", default_lab_path)).expanduser()
+        lab_path.parent.mkdir(parents=True, exist_ok=True)
+        lab_path.write_text(dossier, encoding="utf-8")
+
+        if opportunity.get("next_action") != "reach_out":
+            continue
+
+        default_outreach_path = resolved_dir / "outreach" / f"{slug}.md"
+        outreach_path = Path(opportunity.get("outreach_doc_path", default_outreach_path)).expanduser()
+        outreach_path.parent.mkdir(parents=True, exist_ok=True)
+        outreach_path.write_text(dossier, encoding="utf-8")
+
+
 def render_opportunity_markdown(opportunity: dict) -> str:
     """Render a single opportunity dossier as markdown."""
     lines = [
@@ -297,6 +334,31 @@ def render_opportunity_markdown(opportunity: dict) -> str:
         lines.extend(["", "## Alumni Signals", ""])
         for pattern in opportunity.get("alumni_patterns", []):
             lines.append(f"- {pattern}")
+
+    if opportunity.get("type") == "cold_outreach_target":
+        lines.extend(
+            [
+                "",
+                "## Email Draft",
+                "",
+                f"Quality: `{opportunity.get('email_quality', 'needs_review')}`",
+                f"Hook source: `{opportunity.get('email_hook_source', 'tag_fallback')}`",
+                f"Supporting evidence: {opportunity.get('email_supporting_evidence', 'No supporting evidence captured.')}",
+                f"Skills to mention: {', '.join(opportunity.get('email_skill_alignment', [])) or 'None captured'}",
+            ]
+        )
+        if opportunity.get("email_review_reason"):
+            lines.append(f"Review note: {opportunity['email_review_reason']}")
+        lines.extend(
+            [
+                "",
+                f"Intro: {opportunity.get('email_intro', 'Draft not generated yet.')}",
+                "",
+                f"Custom first paragraph: {opportunity.get('email_observation_paragraph', 'Draft not generated yet.')}",
+                "",
+                f"Constant second paragraph: {opportunity.get('email_constant_template_ref', 'email-template-constant.md')}",
+            ]
+        )
 
     lines.extend(
         [
