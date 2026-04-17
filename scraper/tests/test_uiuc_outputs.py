@@ -10,6 +10,7 @@ from uiuc_outputs import (
     render_playbook_markdown,
     render_queue_markdown,
     render_sources_markdown,
+    write_outreach_backfill,
 )
 
 
@@ -25,6 +26,9 @@ def test_render_queue_markdown_includes_ranked_items() -> None:
                 "company_archetypes": ["Anthropic"],
                 "fit_reasons": ["Trustworthy AI fit"],
                 "url": "https://example.com/bo-li",
+                "email_intro": "My name is Ruthwik Pabbu.",
+                "email_observation_paragraph": "I became interested in your work after reading about trustworthy AI.",
+                "email_constant_template_ref": "email-template-constant.md",
             },
             {
                 "title": "Machine Learning Compiler Intern",
@@ -168,3 +172,78 @@ def test_render_hidden_pathway_markdown_includes_pathway_details() -> None:
     assert "# NCSA SPIN" in markdown
     assert "Officiality: `official`" in markdown
     assert "Student access signals: student, apply" in markdown
+
+
+def test_render_opportunity_markdown_includes_email_draft_for_cold_outreach() -> None:
+    from uiuc_outputs import render_opportunity_markdown
+
+    markdown = render_opportunity_markdown(
+        {
+            "title": "Bo Li",
+            "type": "cold_outreach_target",
+            "track": "ml_ai_research",
+            "total_score": 92,
+            "next_action": "reach_out",
+            "status": "rolling",
+            "evidence_sources": ["official"],
+            "fit_reasons": ["Trustworthy AI fit"],
+            "company_archetypes": ["Anthropic"],
+            "alumni_patterns": [],
+            "skills": ["machine learning"],
+            "tags": ["trustworthy ai", "privacy"],
+            "alumni_evidence_count": 0,
+            "url": "https://example.com/bo-li",
+            "email_intro": "My name is Ruthwik Pabbu.",
+            "email_observation_paragraph": "I became interested in your work after reading about trustworthy AI and robustness.",
+            "email_constant_template_ref": "email-template-constant.md",
+            "email_quality": "send_ready",
+            "email_hook_source": "official_bio",
+            "email_supporting_evidence": "Research in trustworthy AI, robustness, privacy, and machine learning security.",
+            "email_skill_alignment": ["Python", "machine learning", "building toward MLflow"],
+        }
+    )
+
+    assert "## Email Draft" in markdown
+    assert "Quality: `send_ready`" in markdown
+    assert "Hook source: `official_bio`" in markdown
+    assert "Skills to mention: Python, machine learning, building toward MLflow" in markdown
+    assert "Intro: My name is Ruthwik Pabbu." in markdown
+    assert "Custom first paragraph: I became interested in your work after reading about trustworthy AI and robustness." in markdown
+
+
+def test_write_outreach_backfill_updates_existing_doc_path(tmp_path) -> None:
+    outreach_path = tmp_path / "outreach" / "bo-li.md"
+    write_outreach_backfill(
+        [
+            {
+                "id": "bo-li",
+                "title": "Bo Li",
+                "type": "cold_outreach_target",
+                "track": "ml_ai_research",
+                "total_score": 92,
+                "next_action": "reach_out",
+                "status": "rolling",
+                "evidence_sources": ["official"],
+                "fit_reasons": ["Trustworthy AI fit"],
+                "company_archetypes": ["Anthropic"],
+                "skills": ["machine learning"],
+                "tags": ["trustworthy ai"],
+                "alumni_evidence_count": 0,
+                "url": "https://example.com/bo-li",
+                "email_intro": "My name is Ruthwik Pabbu.",
+                "email_observation_paragraph": "I became interested in your research after reading about your work in trustworthy AI.",
+                "email_constant_template_ref": "email-template-constant.md",
+                "email_quality": "needs_review",
+                "email_hook_source": "tag_fallback",
+                "email_supporting_evidence": "trustworthy ai",
+                "email_skill_alignment": ["Python", "machine learning"],
+                "email_review_reason": "Hook is based on broad topic tags rather than a specific official research summary.",
+                "outreach_doc_path": str(outreach_path),
+            }
+        ],
+        output_dir=str(tmp_path),
+    )
+
+    assert outreach_path.exists()
+    assert "## Email Draft" in outreach_path.read_text(encoding="utf-8")
+    assert (tmp_path / "email-template-constant.md").exists()

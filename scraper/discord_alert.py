@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sqlite3
 from pathlib import Path
@@ -69,8 +70,34 @@ def format_uiuc_alert(opportunity: dict) -> str:
         lines.append(f"Mirrors: {', '.join(opportunity.get('company_archetypes', [])[:3])}")
     if opportunity.get("fit_reasons"):
         lines.append(f"Why: {opportunity['fit_reasons'][0]}")
+    if opportunity.get("type") == "cold_outreach_target":
+        if opportunity.get("email_quality"):
+            lines.append(f"Email quality: {opportunity['email_quality']}")
+        if opportunity.get("email_intro"):
+            lines.extend(["", f"Email intro: {opportunity['email_intro']}"])
+        if opportunity.get("email_observation_paragraph"):
+            lines.append(f"Email opener: {opportunity['email_observation_paragraph']}")
+        if opportunity.get("email_hook_source"):
+            lines.append(f"Hook source: {opportunity['email_hook_source']}")
+        if opportunity.get("email_skill_alignment"):
+            lines.append(f"Skills to mention: {', '.join(opportunity.get('email_skill_alignment', []))}")
+        if opportunity.get("email_review_reason"):
+            lines.append(f"Review before sending: {opportunity['email_review_reason']}")
+        if opportunity.get("outreach_doc_path"):
+            lines.append(f"Full draft: {opportunity['outreach_doc_path']}")
     lines.append(f"Link: {opportunity['url']}")
     return "\n".join(lines)
+
+
+def format_uiuc_constant_template_alert(message: str) -> str:
+    return "\n".join(
+        [
+            "\U0001f4cc **UIUC Scout Outreach Constant Paragraph**",
+            "Pin this once and reuse it as the second paragraph for cold outreach.",
+            "",
+            message.strip(),
+        ]
+    )
 
 
 async def send_alert(posting: dict) -> None:
@@ -93,11 +120,18 @@ async def send_batch_alerts(postings: list[dict]) -> None:
 
 async def send_uiuc_alert(opportunity: dict) -> None:
     message = format_uiuc_alert(opportunity)
+    await _send_uiuc_message(message)
+
+
+async def send_uiuc_constant_template_alert(message: str) -> None:
+    await _send_uiuc_message(format_uiuc_constant_template_alert(message))
+
+
+async def _send_uiuc_message(message: str) -> None:
     webhook_url = _get_webhook_url()
     if webhook_url:
         async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.post(webhook_url, json={"content": message})
-            response.raise_for_status()
+            await _post_discord_message(client, webhook_url, {"content": message})
         return
 
     bot_token = os.environ.get("DISCORD_BOT_TOKEN", "")
@@ -109,15 +143,62 @@ async def send_uiuc_alert(opportunity: dict) -> None:
         return
 
     async with httpx.AsyncClient(timeout=15) as client:
-        response = await client.post(
+        await _post_discord_message(
+            client,
             f"https://discord.com/api/v10/channels/{channel_id}/messages",
+            {"content": message},
             headers={
                 "Authorization": f"Bot {bot_token}",
                 "Content-Type": "application/json",
             },
-            json={"content": message},
         )
-        response.raise_for_status()
+
+
+async def _post_discord_message(
+    client: httpx.AsyncClient,
+    url: str,
+    payload: dict,
+    *,
+    headers: dict[str, str] | None = None,
+    max_attempts: int = 5,
+) -> None:
+    for attempt in range(max_attempts):
+        response = await client.post(url, headers=headers, json=payload)
+        status_code = _coerce_status_code(response)
+        if status_code != 429:
+            response.raise_for_status()
+            return
+
+        if attempt == max_attempts - 1:
+            response.raise_for_status()
+            return
+
+        await asyncio.sleep(_extract_retry_after_seconds(response))
+
+
+def _coerce_status_code(response: httpx.Response) -> int:
+    status_code = getattr(response, "status_code", 200)
+    return status_code if isinstance(status_code, int) else 200
+
+
+def _extract_retry_after_seconds(response: httpx.Response) -> float:
+    retry_after_header = getattr(response, "headers", {}).get("Retry-After")
+    try:
+        if retry_after_header is not None:
+            return max(float(retry_after_header), 0.5)
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        payload = response.json()
+    except Exception:
+        payload = {}
+
+    retry_after = payload.get("retry_after", 1.5) if isinstance(payload, dict) else 1.5
+    try:
+        return max(float(retry_after), 0.5)
+    except (TypeError, ValueError):
+        return 1.5
 
 
 def _resolve_uiuc_discord_channel_id(messages_db_path: str | None = None) -> str:

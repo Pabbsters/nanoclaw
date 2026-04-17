@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from pathlib import Path
+import re
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from config import POLL_INTERVAL_MINUTES
 from db import PostingDB
-from discord_alert import send_alert, send_uiuc_alert
+from discord_alert import send_alert, send_uiuc_alert, send_uiuc_constant_template_alert
 from feed import start_feed_server
 from matching import classify_posting
 from runtime_env import load_project_env
@@ -23,7 +25,8 @@ from uiuc_alumni import (
 )
 from uiuc_alumni_collector import get_last_collector_summary, run_alumni_collector
 from uiuc_config import UIUC_MAX_PINGS_PER_RUN
-from uiuc_outputs import sync_uiuc_outputs
+from uiuc_outputs import sync_uiuc_outputs, write_outreach_backfill
+from uiuc_outreach import enrich_outreach_opportunities, get_email_constant_paragraph
 from uiuc_scout import build_opportunities, select_ping_candidates
 
 try:
@@ -51,6 +54,132 @@ logging.basicConfig(
 logger = logging.getLogger("jojo")
 
 db = PostingDB(os.environ.get("DB_PATH", "postings.db"))
+
+
+def _slugify(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+
+
+def _resolve_uiuc_output_dir() -> Path:
+    env_dir = os.environ.get("UIUC_SCOUT_OUTPUT_DIR", "").strip()
+    if env_dir:
+        return Path(env_dir).expanduser()
+    return Path.home() / "Vault" / "NanoClaw" / "uiuc-scout"
+
+
+def _attach_outreach_doc_paths(opportunities: list[dict]) -> list[dict]:
+    output_dir = _resolve_uiuc_output_dir()
+    enriched: list[dict] = []
+    for opportunity in opportunities:
+        if opportunity.get("type") != "cold_outreach_target":
+            enriched.append(dict(opportunity))
+            continue
+
+        slug = _slugify(str(opportunity.get("title", opportunity.get("id", "outreach"))))
+        enriched.append(
+            {
+                **opportunity,
+                "lab_doc_path": str(opportunity.get("lab_doc_path", output_dir / "labs" / f"{slug}.md")),
+                "outreach_doc_path": str(
+                    opportunity.get(
+                        "outreach_doc_path",
+                        output_dir / "outreach" / f"{slug}.md",
+                    )
+                ),
+            }
+        )
+    return enriched
+
+
+def _extract_markdown_section(markdown: str, heading: str) -> str:
+    pattern = re.compile(
+        rf"## {re.escape(heading)}\n\n(.*?)(?=\n## |\Z)",
+        re.DOTALL,
+    )
+    match = pattern.search(markdown)
+    return match.group(1).strip() if match else ""
+
+
+def _extract_markdown_line(markdown: str, prefix: str) -> str:
+    for line in markdown.splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix):].strip().strip("`")
+    return ""
+
+
+def _parse_saved_outreach_doc(path: Path) -> dict | None:
+    try:
+        markdown = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    title = _extract_markdown_line(markdown, "# ")
+    opportunity_type = _extract_markdown_line(markdown, "- Type: ")
+    if opportunity_type != "cold_outreach_target":
+        return None
+
+    link_section = _extract_markdown_section(markdown, "Link")
+    url = next((line.strip() for line in link_section.splitlines() if line.strip()), "")
+    if not title or not url:
+        return None
+
+    reasons = [
+        line[2:].strip()
+        for line in _extract_markdown_section(markdown, "Why It Matches").splitlines()
+        if line.startswith("- ")
+    ]
+    mirrors = [
+        line[2:].strip()
+        for line in _extract_markdown_section(markdown, "Mirrors").splitlines()
+        if line.startswith("- ")
+    ]
+    alumni_patterns = [
+        line[2:].strip()
+        for line in _extract_markdown_section(markdown, "Alumni Signals").splitlines()
+        if line.startswith("- ")
+    ]
+    skills_line = _extract_markdown_line(markdown, "- Skills: ")
+    tags_line = _extract_markdown_line(markdown, "- Tags: ")
+    evidence_line = _extract_markdown_line(markdown, "- Evidence sources: ")
+    evidence_sources = (
+        ["official"]
+        if evidence_line == "official"
+        else [item.strip() for item in evidence_line.split(",") if item.strip()]
+    )
+
+    return {
+        "id": path.stem,
+        "source": "vault_backfill",
+        "title": title,
+        "url": url,
+        "type": opportunity_type,
+        "track": _extract_markdown_line(markdown, "- Track: "),
+        "total_score": float(_extract_markdown_line(markdown, "- Score: ") or 0),
+        "next_action": _extract_markdown_line(markdown, "- Next action: ") or "reach_out",
+        "status": _extract_markdown_line(markdown, "- Status: ") or "rolling",
+        "fit_reasons": reasons,
+        "company_archetypes": mirrors,
+        "skills": [] if skills_line in {"", "None captured"} else [item.strip() for item in skills_line.split(",") if item.strip()],
+        "tags": [] if tags_line in {"", "None captured"} else [item.strip() for item in tags_line.split(",") if item.strip()],
+        "evidence_sources": evidence_sources,
+        "alumni_patterns": alumni_patterns,
+        "alumni_evidence_count": int(_extract_markdown_line(markdown, "- Alumni evidence count: ") or 0),
+        "outreach_doc_path": str(path),
+    }
+
+
+def _load_saved_outreach_docs(output_dir: Path) -> list[dict]:
+    outreach_dir = output_dir / "outreach"
+    if not outreach_dir.exists():
+        return []
+
+    opportunities: list[dict] = []
+    for path in sorted(outreach_dir.glob("*.md")):
+        opportunity = _parse_saved_outreach_doc(path)
+        if opportunity is None:
+            continue
+        opportunities.append(opportunity)
+    return opportunities
 
 
 async def process_postings(
@@ -130,6 +259,8 @@ async def process_uiuc_records(
         alumni_patterns=alumni_patterns,
         hidden_pathway_records=hidden_pathway_records,
     )
+    opportunities = await enrich_outreach_opportunities(opportunities)
+    opportunities = _attach_outreach_doc_paths(opportunities)
     new_count = 0
     new_opportunities: list[dict] = []
 
@@ -165,6 +296,50 @@ async def process_uiuc_records(
 
     if new_count > 0:
         logger.info("[uiuc_scout] %d new opportunities found", new_count)
+
+
+async def resend_uiuc_outreach_with_drafts() -> int:
+    """Backfill outreach docs and resend current cold-outreach targets with email drafts."""
+    current_snapshot = db.get_all_uiuc()
+    using_vault_fallback = False
+    if not current_snapshot:
+        current_snapshot = _load_saved_outreach_docs(_resolve_uiuc_output_dir())
+        using_vault_fallback = True
+    if not current_snapshot:
+        return 0
+
+    enriched_snapshot = await enrich_outreach_opportunities(current_snapshot)
+    enriched_snapshot = _attach_outreach_doc_paths(enriched_snapshot)
+
+    try:
+        write_outreach_backfill(enriched_snapshot)
+    except Exception as exc:
+        logger.error("Failed to sync UIUC outreach backfill outputs: %s", exc)
+
+    await send_uiuc_constant_template_alert(get_email_constant_paragraph())
+
+    targets = [
+        opportunity
+        for opportunity in enriched_snapshot
+        if opportunity.get("type") == "cold_outreach_target"
+        and opportunity.get("next_action") == "reach_out"
+    ]
+    targets.sort(
+        key=lambda opportunity: (
+            opportunity.get("email_quality") != "send_ready",
+            -float(opportunity.get("total_score", 0) or 0),
+            str(opportunity.get("title", "")),
+        )
+    )
+    for opportunity in targets:
+        try:
+            await send_uiuc_alert(opportunity)
+        except Exception as exc:
+            logger.error("Failed to resend UIUC outreach alert: %s", exc)
+        await asyncio.sleep(0.35)
+
+    logger.info("[uiuc_outreach_resend] resent %d cold-outreach alerts", len(targets))
+    return len(targets)
 
 
 # ── Poll functions for each source ────────────────────────────────────
