@@ -1,4 +1,11 @@
-import { Client, Events, GatewayIntentBits, Message, TextChannel } from 'discord.js';
+import {
+  Client,
+  Events,
+  GatewayIntentBits,
+  Message,
+  Partials,
+  TextChannel,
+} from 'discord.js';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
@@ -37,9 +44,59 @@ export class DiscordChannel implements Channel {
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.DirectMessages,
       ],
+      partials: [Partials.Channel, Partials.Message],
+    });
+
+    this.client.once(Events.ClientReady, async (c) => {
+      const guilds = c.guilds.cache.map((g) => `${g.name} (${g.id})`);
+      logger.info(
+        { guildCount: c.guilds.cache.size, guilds },
+        'Discord bot ready — guild list',
+      );
+
+      // Pre-fetch registered DM channels so discord.js caches them.
+      // Without this, MessageCreate won't fire for uncached DM channels
+      // even with Partials enabled.
+      const groups = this.opts.registeredGroups();
+      for (const jid of Object.keys(groups)) {
+        if (!jid.startsWith('dc:')) continue;
+        const channelId = jid.slice(3);
+        try {
+          const channel = await c.channels.fetch(channelId);
+          logger.info(
+            { channelId, type: channel?.type },
+            'Pre-fetched Discord channel',
+          );
+        } catch (err) {
+          logger.warn(
+            { channelId, err },
+            'Failed to pre-fetch Discord channel',
+          );
+        }
+      }
+    });
+
+    // Raw gateway event logger — catches every packet Discord sends
+    this.client.on('raw' as any, (packet: any) => {
+      if (packet?.t) {
+        logger.info(
+          { event: packet.t, channelId: packet.d?.channel_id },
+          'Discord raw gateway event',
+        );
+      }
     });
 
     this.client.on(Events.MessageCreate, async (message: Message) => {
+      logger.info(
+        {
+          channelId: message.channelId,
+          author: message.author.username,
+          isBot: message.author.bot,
+          isDM: !message.guild,
+          content: message.content?.substring(0, 50),
+        },
+        'Discord message received',
+      );
       // Ignore bot messages (including own)
       if (message.author.bot) return;
 
@@ -88,18 +145,20 @@ export class DiscordChannel implements Channel {
 
       // Handle attachments — store placeholders so the agent knows something was sent
       if (message.attachments.size > 0) {
-        const attachmentDescriptions = [...message.attachments.values()].map((att) => {
-          const contentType = att.contentType || '';
-          if (contentType.startsWith('image/')) {
-            return `[Image: ${att.name || 'image'}]`;
-          } else if (contentType.startsWith('video/')) {
-            return `[Video: ${att.name || 'video'}]`;
-          } else if (contentType.startsWith('audio/')) {
-            return `[Audio: ${att.name || 'audio'}]`;
-          } else {
-            return `[File: ${att.name || 'file'}]`;
-          }
-        });
+        const attachmentDescriptions = [...message.attachments.values()].map(
+          (att) => {
+            const contentType = att.contentType || '';
+            if (contentType.startsWith('image/')) {
+              return `[Image: ${att.name || 'image'}]`;
+            } else if (contentType.startsWith('video/')) {
+              return `[Video: ${att.name || 'video'}]`;
+            } else if (contentType.startsWith('audio/')) {
+              return `[Audio: ${att.name || 'audio'}]`;
+            } else {
+              return `[File: ${att.name || 'file'}]`;
+            }
+          },
+        );
         if (content) {
           content = `${content}\n${attachmentDescriptions.join('\n')}`;
         } else {
@@ -125,7 +184,13 @@ export class DiscordChannel implements Channel {
 
       // Store chat metadata for discovery
       const isGroup = message.guild !== null;
-      this.opts.onChatMetadata(chatJid, timestamp, chatName, 'discord', isGroup);
+      this.opts.onChatMetadata(
+        chatJid,
+        timestamp,
+        chatName,
+        'discord',
+        isGroup,
+      );
 
       // Only deliver full message for registered groups
       const group = this.opts.registeredGroups()[chatJid];
