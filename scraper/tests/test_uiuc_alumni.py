@@ -15,8 +15,8 @@ from uiuc_alumni import (
 
 def test_normalize_linkedin_profile_record_keeps_relevant_uiuc_profile() -> None:
     record = {
-        "source": "composio_linkedin",
-        "profile_url": "https://linkedin.example/alice",
+        "source": "public_linkedin_collector",
+        "profile_url": "https://www.linkedin.com/in/alice-illinois/",
         "name": "Alice Illinois",
         "headline": "UIUC CS student doing ML research at NCSA",
         "education": ["University of Illinois Urbana-Champaign"],
@@ -36,6 +36,7 @@ def test_normalize_linkedin_profile_record_keeps_relevant_uiuc_profile() -> None
     assert normalized["education_matches_uiuc"] is True
     assert "ml_ai_research" in normalized["path_tags"]
     assert normalized["resource_signals"][0]["entity_name"] == "NCSA SPIN"
+    assert normalized["evidence_provider"] == "public_linkedin"
 
 
 def test_load_alumni_profile_records_reads_list_payload(tmp_path) -> None:
@@ -81,7 +82,8 @@ def test_build_alumni_patterns_aggregates_repeated_resources() -> None:
     profiles = [
         normalize_linkedin_profile_record(
             {
-                "profile_url": "https://linkedin.example/alice",
+                "source": "public_linkedin_collector",
+                "profile_url": "https://www.linkedin.com/in/alice-illinois/",
                 "name": "Alice Illinois",
                 "headline": "UIUC ML researcher",
                 "education": ["University of Illinois Urbana-Champaign"],
@@ -91,7 +93,8 @@ def test_build_alumni_patterns_aggregates_repeated_resources() -> None:
         ),
         normalize_linkedin_profile_record(
             {
-                "profile_url": "https://linkedin.example/carol",
+                "source": "public_linkedin_collector",
+                "profile_url": "https://www.linkedin.com/in/carol-illinois/",
                 "name": "Carol Illinois",
                 "headline": "UIUC AI researcher",
                 "education": ["UIUC"],
@@ -109,6 +112,7 @@ def test_build_alumni_patterns_aggregates_repeated_resources() -> None:
     assert ncsa_spin["evidence_count"] == 2
     assert ncsa_spin["recommended_action"] == "reach_out"
     assert bo_li_lab["evidence_count"] == 2
+    assert ncsa_spin["linkedin_backing_count"] == 2
 
 
 def test_build_alumni_patterns_merges_same_entity_across_signal_types() -> None:
@@ -215,6 +219,10 @@ def test_apply_alumni_feedback_boosts_matching_official_opportunity() -> None:
             "recommended_action": "reach_out",
             "score": 42,
             "illinois_connected": True,
+            "evidence_providers": ["browser_assisted_linkedin"],
+            "provider_counts": {"browser_assisted_linkedin": 3},
+            "linkedin_backing_count": 3,
+            "source_strength": 9,
         }
     ]
 
@@ -224,3 +232,4 @@ def test_apply_alumni_feedback_boosts_matching_official_opportunity() -> None:
     assert enriched[0]["evidence_sources"] == ["official", "alumni"]
     assert enriched[0]["alumni_evidence_count"] == 3
     assert "Bo Li Lab" in enriched[0]["alumni_patterns"]
+    assert enriched[0]["linkedin_backing_count"] == 3

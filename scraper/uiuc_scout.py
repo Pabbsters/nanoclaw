@@ -266,6 +266,9 @@ def normalize_source_record(record: dict[str, Any]) -> dict[str, Any] | None:
         "evidence_sources": evidence_sources,
         "alumni_patterns": list(record.get("alumni_patterns", [])),
         "alumni_evidence_count": int(record.get("alumni_evidence_count", 0) or 0),
+        "alumni_evidence_providers": list(record.get("alumni_evidence_providers", [])),
+        "alumni_source_strength": int(record.get("alumni_source_strength", 0) or 0),
+        "linkedin_backing_count": int(record.get("linkedin_backing_count", 0) or 0),
         "hidden_pathway_signals": list(record.get("hidden_pathway_signals", [])),
         "should_ping": total_score >= UIUC_PING_SCORE_THRESHOLD and next_action in {"apply_now", "reach_out"},
     }

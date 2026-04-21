@@ -10,7 +10,7 @@ import re
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from config import POLL_INTERVAL_MINUTES
+from config import POLL_INTERVAL_MINUTES, get_direct_source_alert_policy, is_direct_source_alerting_enabled
 from db import PostingDB
 from discord_alert import send_alert, send_uiuc_alert, send_uiuc_constant_template_alert
 from feed import start_feed_server
@@ -213,10 +213,19 @@ async def process_postings(
             deadline=posting.get("deadline", ""),
         )
 
-        try:
-            await send_alert(posting)
-        except Exception as e:
-            logger.error("Failed to send alert: %s", e)
+        if is_direct_source_alerting_enabled(company_slug):
+            try:
+                await send_alert(posting)
+            except Exception as e:
+                logger.error("Failed to send alert: %s", e)
+        else:
+            policy = get_direct_source_alert_policy(company_slug)
+            logger.info(
+                "[%s] tracked posting stored without alert for %s because alerting is disabled (%s)",
+                source,
+                company_slug,
+                policy.get("reason", "no reason recorded"),
+            )
 
         new_count += 1
 

@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 
+from config import build_coverage_report
 from uiuc_config import UIUC_HIDDEN_PATHWAY_PAGES, UIUC_SEED_TARGETS, UIUC_SOURCE_PAGES
 from uiuc_outreach import build_constant_template_markdown
 
@@ -80,8 +81,22 @@ def render_sources_markdown(alumni_patterns: list[dict] | None = None, source_he
     if alumni_patterns:
         lines.extend(["", "## Alumni-Discovered Signals", ""])
         for pattern in alumni_patterns[:10]:
+            provider_summary = ", ".join(pattern.get("evidence_providers", [])) or "unknown"
             lines.append(
-                f"- **{pattern['entity_name']}** (`{pattern['entity_type']}`): {pattern['evidence_count']} UIUC profiles"
+                f"- **{pattern['entity_name']}** (`{pattern['entity_type']}`): {pattern['evidence_count']} UIUC profiles | providers `{provider_summary}`"
+            )
+
+    coverage = build_coverage_report()
+    degraded = [
+        (slug, policy)
+        for slug, policy in dict(coverage.get("alert_policy_by_company", {})).items()
+        if not bool(policy.get("alerting_enabled", True))
+    ]
+    if degraded:
+        lines.extend(["", "## Degraded Direct Sources", ""])
+        for slug, policy in degraded:
+            lines.append(
+                f"- **{slug}**: source `{policy.get('preferred_source', 'unknown')}` | status `{policy.get('status', 'unknown')}` | alerting `disabled` | {policy.get('reason', 'No reason recorded')}"
             )
 
     return "\n".join(lines).strip() + "\n"
@@ -104,6 +119,7 @@ def render_alumni_patterns_markdown(patterns: list[dict]) -> str:
             [
                 f"{index}. **{pattern['entity_name']}**",
                 f"Type: `{pattern['entity_type']}` | Evidence count: `{pattern['evidence_count']}` | Score: `{pattern['score']}`",
+                f"Providers: {', '.join(pattern.get('evidence_providers', [])) or 'None captured'} | LinkedIn-backed count: `{pattern.get('linkedin_backing_count', 0)}`",
                 f"Path tags: {', '.join(pattern.get('path_tags', [])) or 'None captured'}",
                 f"Recommended action: `{pattern.get('recommended_action', 'track')}`",
                 f"Why: {(pattern.get('fit_reasons') or ['No rationale yet'])[0]}",
@@ -141,8 +157,9 @@ def render_playbook_markdown(opportunities: list[dict], patterns: list[dict], al
         if pattern.get("entity_type") in {"professor", "lab", "center", "program", "resource"}
     ]
     for pattern in top_resource_patterns[:8]:
+        provider_summary = ", ".join(pattern.get("evidence_providers", [])) or "fallback_public"
         lines.append(
-            f"- **{pattern['entity_name']}**: seen in `{pattern['evidence_count']}` UIUC profiles and linked to {', '.join(pattern.get('path_tags', [])) or 'general technical'} paths."
+            f"- **{pattern['entity_name']}**: seen in `{pattern['evidence_count']}` UIUC profiles via `{provider_summary}` and linked to {', '.join(pattern.get('path_tags', [])) or 'general technical'} paths."
         )
 
     return "\n".join(lines).strip() + "\n"
@@ -203,14 +220,83 @@ def render_alumni_collector_markdown(summary: dict | None) -> str:
         ]
     )
     for provider in summary.get("provider_statuses", []):
+        promoted = dict(summary.get("promoted_provider_counts", {})).get(provider.get("provider", "unknown"), 0)
         lines.append(
-            f"- **{provider.get('provider', 'unknown')}**: `{provider.get('status', 'unknown')}` | queries `{provider.get('queries_run', 0)}` | candidates `{provider.get('candidates_found', 0)}`"
+            f"- **{provider.get('provider', 'unknown')}**: `{provider.get('status', 'unknown')}` | queries `{provider.get('queries_run', 0)}` | candidates `{provider.get('candidates_found', 0)}` | promoted `{promoted}`"
         )
+
+    provider_states = {provider.get("provider", "unknown"): provider.get("status", "unknown") for provider in summary.get("provider_statuses", [])}
+    lines.extend(["", "## Interpretation", ""])
+    if provider_states.get("public_linkedin") == "blocked":
+        lines.append("- Public LinkedIn is blocked right now, so low alumni results may reflect provider blocking rather than a true lack of pathways.")
+    if provider_states.get("browser_assisted") == "unconfigured":
+        lines.append("- Browser-assisted LinkedIn is not configured, so the backbone provider is currently limited to opportunistic public hits or saved exports.")
+    if provider_states.get("fallback_public") == "healthy":
+        lines.append("- Fallback public evidence is active as support coverage while LinkedIn is limited.")
+    if summary.get("candidates_found", 0) == 0 and not summary.get("errors"):
+        lines.append("- No new evidence was found across the currently healthy providers.")
 
     if summary.get("errors"):
         lines.extend(["", "## Blocked / Failed", ""])
         for provider in summary.get("errors", []):
             lines.append(f"- {provider.get('provider', 'unknown')}: `{provider.get('status', 'unknown')}`")
+
+    return "\n".join(lines).strip() + "\n"
+
+
+def render_status_markdown(
+    opportunities: list[dict],
+    collector_summary: dict | None = None,
+    source_health: list[dict] | None = None,
+) -> str:
+    coverage = build_coverage_report()
+    tracked_source_count = len(source_health or []) or (len(UIUC_SOURCE_PAGES) + len(UIUC_HIDDEN_PATHWAY_PAGES))
+    degraded = [
+        (slug, policy)
+        for slug, policy in dict(coverage.get("alert_policy_by_company", {})).items()
+        if not bool(policy.get("alerting_enabled", True))
+    ]
+    lines = [
+        "# UIUC Scout Status",
+        "",
+        "Auto-generated operator view of the current LinkedIn-first UIUC scout state.",
+        "",
+        "## What Is Live",
+        "",
+        "- LinkedIn is the backbone for alumni intelligence.",
+        "- Browser-assisted LinkedIn/Composio exports are the preferred provider when configured.",
+        "- Public LinkedIn search remains opportunistic and may be blocked.",
+        "- Fallback public evidence supports the collector when LinkedIn is unavailable.",
+        "- Official Illinois discovery remains the trust anchor for `apply_now`.",
+        "",
+        "## Current Snapshot",
+        "",
+        f"- Ranked Illinois opportunities: `{len(opportunities)}`",
+        f"- Official source pages tracked: `{tracked_source_count}`",
+        f"- Collector mode: `{(collector_summary or {}).get('mode', 'unknown')}`",
+        f"- Collector candidates found: `{(collector_summary or {}).get('candidates_found', 0)}`",
+        f"- Collector profiles promoted: `{(collector_summary or {}).get('profiles_promoted', 0)}`",
+        "",
+        "## Important Caveats",
+        "",
+    ]
+
+    if collector_summary and collector_summary.get("provider_statuses"):
+        provider_bits = [
+            f"{provider.get('provider', 'unknown')}={provider.get('status', 'unknown')}"
+            for provider in collector_summary.get("provider_statuses", [])
+        ]
+        lines.append(f"- Provider health: {', '.join(provider_bits)}")
+    else:
+        lines.append("- Collector summary is not available yet.")
+
+    if degraded:
+        for slug, policy in degraded:
+            lines.append(
+                f"- {slug} is tracked but degraded: source `{policy.get('preferred_source', 'unknown')}` has alerting disabled because {policy.get('reason', 'no reason recorded')}."
+            )
+    else:
+        lines.append("- No degraded direct sources are currently configured.")
 
     return "\n".join(lines).strip() + "\n"
 
@@ -234,6 +320,10 @@ def sync_uiuc_outputs(
     hidden_pathway_records = hidden_pathway_records or []
 
     _ensure_structure(resolved_dir)
+    (resolved_dir / "STATUS.md").write_text(
+        render_status_markdown(opportunities, collector_summary, source_health),
+        encoding="utf-8",
+    )
     (resolved_dir / "queue.md").write_text(render_queue_markdown(opportunities), encoding="utf-8")
     (resolved_dir / "sources.md").write_text(render_sources_markdown(alumni_patterns, source_health), encoding="utf-8")
     (resolved_dir / "alumni-patterns.md").write_text(render_alumni_patterns_markdown(alumni_patterns), encoding="utf-8")
@@ -385,6 +475,7 @@ def render_alumni_pattern_markdown(pattern: dict) -> str:
         "",
         f"- Type: `{pattern.get('entity_type', 'resource')}`",
         f"- Evidence count: `{pattern.get('evidence_count', 0)}`",
+        f"- Providers: {', '.join(pattern.get('evidence_providers', [])) or 'None captured'}",
         f"- Score: `{pattern.get('score', 0)}`",
         f"- Recommended action: `{pattern.get('recommended_action', 'track')}`",
         "",
@@ -411,6 +502,8 @@ def render_alumni_profile_markdown(profile: dict) -> str:
         f"- Headline: {profile.get('headline', 'N/A')}",
         f"- Current org: {profile.get('current_org', 'N/A')}",
         f"- Path tags: {', '.join(profile.get('path_tags', [])) or 'None captured'}",
+        f"- Evidence provider: {profile.get('evidence_provider', 'unknown')}",
+        f"- Source strength: {profile.get('source_strength', 0)}",
         f"- Confidence: {profile.get('confidence', 0)}",
         "",
         "## Research Orgs",

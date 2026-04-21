@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import AsyncMock
 
+import pytest
+
+import main
 from main import _load_saved_outreach_docs, _parse_saved_outreach_doc
 
 
@@ -103,3 +107,34 @@ def test_load_saved_outreach_docs_reads_directory(tmp_path: Path) -> None:
     assert len(opportunities) == 1
     assert opportunities[0]["title"] == "Bo Li"
     assert opportunities[0]["evidence_sources"] == ["official"]
+
+
+@pytest.mark.asyncio
+async def test_process_postings_skips_alert_when_company_is_degraded(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeDB:
+        def is_new(self, source: str, company_slug: str, posting_id: str) -> bool:
+            return True
+
+        def mark_seen(self, **_: object) -> None:
+            return None
+
+    send_alert = AsyncMock()
+    monkeypatch.setattr(main, "db", FakeDB())
+    monkeypatch.setattr(main, "send_alert", send_alert)
+    monkeypatch.setattr(main, "classify_posting", lambda title, description: {"track": "ai_data"})
+
+    await main.process_postings(
+        [
+            {
+                "posting_id": "123",
+                "company_slug": "tesla",
+                "company_name": "Tesla",
+                "title": "Software Engineering Internship",
+                "description": "Intern role",
+                "url": "https://example.com/tesla",
+            }
+        ],
+        "workday_api",
+    )
+
+    send_alert.assert_not_called()

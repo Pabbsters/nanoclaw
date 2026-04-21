@@ -9,6 +9,7 @@ from uiuc_outputs import (
     render_pathways_markdown,
     render_playbook_markdown,
     render_queue_markdown,
+    render_status_markdown,
     render_sources_markdown,
     write_outreach_backfill,
 )
@@ -100,13 +101,15 @@ def test_render_playbook_markdown_summarizes_paths() -> None:
 
 def test_render_sources_markdown_includes_health() -> None:
     markdown = render_sources_markdown(
-        [{"entity_name": "NCSA", "entity_type": "center", "evidence_count": 2}],
+        [{"entity_name": "NCSA", "entity_type": "center", "evidence_count": 2, "evidence_providers": ["browser_assisted_linkedin"]}],
         [{"source": "gies_dsrs", "status": "healthy", "records_found": 1}],
     )
 
     assert "# UIUC Scout Sources" in markdown
     assert "status `healthy`" in markdown
     assert "NCSA" in markdown
+    assert "Degraded Direct Sources" in markdown
+    assert "tesla" in markdown
 
 
 def test_render_alumni_collector_markdown_summarizes_provider_health() -> None:
@@ -119,17 +122,40 @@ def test_render_alumni_collector_markdown_summarizes_provider_health() -> None:
             "profiles_promoted": 2,
             "output_dir": "/tmp/alumni-auto",
             "provider_statuses": [
-                {"provider": "public", "status": "blocked", "queries_run": 72, "candidates_found": 0},
+                {"provider": "public_linkedin", "status": "blocked", "queries_run": 72, "candidates_found": 0},
+                {"provider": "fallback_public", "status": "healthy", "queries_run": 72, "candidates_found": 2},
                 {"provider": "browser_assisted", "status": "healthy", "queries_run": 0, "candidates_found": 4},
             ],
-            "errors": [{"provider": "public", "status": "blocked"}],
+            "promoted_provider_counts": {"browser_assisted": 1, "fallback_public": 1},
+            "errors": [{"provider": "public_linkedin", "status": "blocked"}],
         }
     )
 
     assert "# UIUC Alumni Collector" in markdown
     assert "Mode: `hybrid`" in markdown
-    assert "**public**: `blocked`" in markdown
+    assert "**public_linkedin**: `blocked`" in markdown
+    assert "**fallback_public**: `healthy`" in markdown
     assert "browser_assisted" in markdown
+
+
+def test_render_status_markdown_mentions_linkedin_backbone_and_tesla_degraded() -> None:
+    markdown = render_status_markdown(
+        [{"title": "Bo Li"}],
+        collector_summary={
+            "mode": "hybrid",
+            "candidates_found": 1,
+            "profiles_promoted": 1,
+            "provider_statuses": [
+                {"provider": "public_linkedin", "status": "blocked"},
+                {"provider": "fallback_public", "status": "healthy"},
+            ],
+        },
+        source_health=[{"source": "ece_ai_faculty", "status": "healthy", "records_found": 10}],
+    )
+
+    assert "LinkedIn is the backbone" in markdown
+    assert "public_linkedin=blocked" in markdown
+    assert "tesla is tracked but degraded" in markdown
 
 
 def test_render_pathways_markdown_includes_hidden_routes() -> None:

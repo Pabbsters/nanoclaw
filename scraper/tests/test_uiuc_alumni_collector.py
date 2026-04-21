@@ -9,6 +9,7 @@ import pytest
 from uiuc_alumni_collector import (
     _promote_candidate,
     _run_browser_assisted_provider,
+    build_fallback_public_queries,
     build_alumni_collector_queries,
     run_alumni_collector,
 )
@@ -21,6 +22,15 @@ def test_build_alumni_collector_queries_cover_uiuc_paths() -> None:
     assert any("NCSA" in query for query in queries)
     assert any("quant" in query.lower() for query in queries)
     assert all("linkedin.com/in" in query for query in queries)
+
+
+def test_build_fallback_public_queries_cover_uiuc_paths() -> None:
+    queries = build_fallback_public_queries()
+
+    assert queries
+    assert any("site:illinois.edu" in query for query in queries)
+    assert any("site:github.com" in query for query in queries)
+    assert any("NCSA" in query for query in queries)
 
 
 def test_promote_candidate_filters_low_confidence() -> None:
@@ -59,11 +69,11 @@ async def test_run_alumni_collector_writes_batch_and_merged_profiles(
     auto_dir = tmp_path / "alumni-auto"
     merged_path = tmp_path / "alumni_profiles_merged.json"
 
-    async def fake_public_provider(queries: list[str]):
+    async def fake_public_linkedin_provider(queries: list[str]):
         return (
             [
                 {
-                    "provider": "public",
+                    "provider": "public_linkedin",
                     "query": queries[0],
                     "profile_url": "https://www.linkedin.com/in/alice-illinois/",
                     "name": "Alice Illinois",
@@ -75,7 +85,7 @@ async def test_run_alumni_collector_writes_batch_and_merged_profiles(
                 }
             ],
             {
-                "provider": "public",
+                "provider": "public_linkedin",
                 "status": "healthy",
                 "queries_run": len(queries),
                 "blocked_queries": 0,
@@ -83,6 +93,16 @@ async def test_run_alumni_collector_writes_batch_and_merged_profiles(
                 "candidates_found": 1,
             },
         )
+
+    async def fake_fallback_provider(queries: list[str]):
+        return [], {
+            "provider": "fallback_public",
+            "status": "healthy",
+            "queries_run": len(queries),
+            "blocked_queries": 0,
+            "errors": 0,
+            "candidates_found": 0,
+        }
 
     async def fake_browser_provider():
         return [], {
@@ -94,7 +114,8 @@ async def test_run_alumni_collector_writes_batch_and_merged_profiles(
             "candidates_found": 0,
         }
 
-    monkeypatch.setattr("uiuc_alumni_collector._run_public_provider", fake_public_provider)
+    monkeypatch.setattr("uiuc_alumni_collector._run_public_linkedin_provider", fake_public_linkedin_provider)
+    monkeypatch.setattr("uiuc_alumni_collector._run_fallback_public_provider", fake_fallback_provider)
     monkeypatch.setattr("uiuc_alumni_collector._run_browser_assisted_provider", fake_browser_provider)
     monkeypatch.setattr("uiuc_alumni_collector._default_auto_output_dir", lambda: auto_dir)
     monkeypatch.setattr("uiuc_alumni_collector._default_merged_path", lambda: merged_path)
@@ -106,6 +127,7 @@ async def test_run_alumni_collector_writes_batch_and_merged_profiles(
     assert len(batch_files) == 1
     assert summary["profiles_promoted"] == 1
     assert summary["merged_profiles_total"] == 1
+    assert summary["promoted_provider_counts"]["public_linkedin"] == 1
 
     merged = json.loads(merged_path.read_text(encoding="utf-8"))
     assert len(merged["profiles"]) == 1
@@ -120,11 +142,11 @@ async def test_run_alumni_collector_merges_existing_profiles(
     auto_dir = tmp_path / "alumni-auto"
     merged_path = tmp_path / "alumni_profiles_merged.json"
 
-    async def fake_public_provider(queries: list[str]):
+    async def fake_public_linkedin_provider(queries: list[str]):
         return (
             [
                 {
-                    "provider": "public",
+                    "provider": "public_linkedin",
                     "query": queries[0],
                     "profile_url": "https://www.linkedin.com/in/alice-illinois/",
                     "name": "Alice Illinois",
@@ -136,7 +158,7 @@ async def test_run_alumni_collector_merges_existing_profiles(
                 }
             ],
             {
-                "provider": "public",
+                "provider": "public_linkedin",
                 "status": "healthy",
                 "queries_run": len(queries),
                 "blocked_queries": 0,
@@ -144,6 +166,16 @@ async def test_run_alumni_collector_merges_existing_profiles(
                 "candidates_found": 1,
             },
         )
+
+    async def fake_fallback_provider(queries: list[str]):
+        return [], {
+            "provider": "fallback_public",
+            "status": "healthy",
+            "queries_run": len(queries),
+            "blocked_queries": 0,
+            "errors": 0,
+            "candidates_found": 0,
+        }
 
     async def fake_browser_provider():
         return [], {
@@ -163,7 +195,8 @@ async def test_run_alumni_collector_merges_existing_profiles(
         "path_tags": ["quant_fintech"],
     }
 
-    monkeypatch.setattr("uiuc_alumni_collector._run_public_provider", fake_public_provider)
+    monkeypatch.setattr("uiuc_alumni_collector._run_public_linkedin_provider", fake_public_linkedin_provider)
+    monkeypatch.setattr("uiuc_alumni_collector._run_fallback_public_provider", fake_fallback_provider)
     monkeypatch.setattr("uiuc_alumni_collector._run_browser_assisted_provider", fake_browser_provider)
     monkeypatch.setattr("uiuc_alumni_collector._default_auto_output_dir", lambda: auto_dir)
     monkeypatch.setattr("uiuc_alumni_collector._default_merged_path", lambda: merged_path)
@@ -175,3 +208,72 @@ async def test_run_alumni_collector_merges_existing_profiles(
     names = {profile["name"] for profile in merged["profiles"]}
     assert summary["merged_profiles_total"] == 2
     assert names == {"Alice Illinois", "Bob Illinois"}
+
+
+@pytest.mark.asyncio
+async def test_run_alumni_collector_uses_fallback_when_public_linkedin_is_blocked(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auto_dir = tmp_path / "alumni-auto"
+    merged_path = tmp_path / "alumni_profiles_merged.json"
+
+    async def fake_public_linkedin_provider(queries: list[str]):
+        return [], {
+            "provider": "public_linkedin",
+            "status": "blocked",
+            "queries_run": len(queries),
+            "blocked_queries": len(queries),
+            "errors": 0,
+            "candidates_found": 0,
+        }
+
+    async def fake_fallback_provider(queries: list[str]):
+        return (
+            [
+                {
+                    "provider": "fallback_public",
+                    "query": queries[0],
+                    "profile_url": "https://github.com/alice-illinois",
+                    "name": "Alice Illinois",
+                    "headline": "UIUC ML researcher at NCSA",
+                    "snippet": "University of Illinois Urbana-Champaign student doing ML research at NCSA",
+                    "path_tags": ["ml_ai_research"],
+                    "confidence": 0.85,
+                    "raw_source_url": "https://example.com/search",
+                }
+            ],
+            {
+                "provider": "fallback_public",
+                "status": "healthy",
+                "queries_run": len(queries),
+                "blocked_queries": 0,
+                "errors": 0,
+                "candidates_found": 1,
+            },
+        )
+
+    async def fake_browser_provider():
+        return [], {
+            "provider": "browser_assisted",
+            "status": "unconfigured",
+            "queries_run": 0,
+            "blocked_queries": 0,
+            "errors": 0,
+            "candidates_found": 0,
+        }
+
+    monkeypatch.setattr("uiuc_alumni_collector._run_public_linkedin_provider", fake_public_linkedin_provider)
+    monkeypatch.setattr("uiuc_alumni_collector._run_fallback_public_provider", fake_fallback_provider)
+    monkeypatch.setattr("uiuc_alumni_collector._run_browser_assisted_provider", fake_browser_provider)
+    monkeypatch.setattr("uiuc_alumni_collector._default_auto_output_dir", lambda: auto_dir)
+    monkeypatch.setattr("uiuc_alumni_collector._default_merged_path", lambda: merged_path)
+    monkeypatch.setattr("uiuc_alumni_collector.load_alumni_profile_records", lambda: [])
+
+    summary = await run_alumni_collector(mode="hybrid")
+
+    assert summary["profiles_promoted"] == 1
+    assert summary["promoted_provider_counts"]["fallback_public"] == 1
+    providers = {provider["provider"]: provider["status"] for provider in summary["provider_statuses"]}
+    assert providers["public_linkedin"] == "blocked"
+    assert providers["fallback_public"] == "healthy"

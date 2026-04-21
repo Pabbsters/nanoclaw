@@ -9,7 +9,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 import httpx
 
@@ -38,6 +38,13 @@ COLLECTOR_QUERY_PATHS: tuple[str, ...] = (
     "quant",
     "trading",
     "fintech",
+)
+
+FALLBACK_PUBLIC_SITES: tuple[str, ...] = (
+    "illinois.edu",
+    "github.com",
+    "scholar.google.com",
+    "sites.google.com",
 )
 
 LINKEDIN_URL_RE = re.compile(r"https?://(?:www\.)?linkedin\.com/in/[A-Za-z0-9%_\-]+/?", re.IGNORECASE)
@@ -72,6 +79,17 @@ def build_alumni_collector_queries() -> list[str]:
         for path in COLLECTOR_QUERY_PATHS:
             queries.append(
                 f'site:linkedin.com/in ("University of Illinois Urbana-Champaign" OR UIUC) "{resource}" "{path}"'
+            )
+    return queries
+
+
+def build_fallback_public_queries() -> list[str]:
+    queries: list[str] = []
+    site_filter = " OR ".join(f"site:{site}" for site in FALLBACK_PUBLIC_SITES)
+    for resource in COLLECTOR_QUERY_RESOURCES:
+        for path in COLLECTOR_QUERY_PATHS:
+            queries.append(
+                f'("University of Illinois Urbana-Champaign" OR UIUC) "{resource}" "{path}" ({site_filter})'
             )
     return queries
 
@@ -128,7 +146,7 @@ def _extract_candidates_from_markdown(markdown: str, query: str, raw_source_url:
         name = label.split(" | ")[0].split(" - ")[0].strip()
         candidates.append(
             {
-                "provider": "public",
+                "provider": "public_linkedin",
                 "query": query,
                 "profile_url": url,
                 "name": name,
@@ -154,7 +172,7 @@ def _extract_candidates_from_markdown(markdown: str, query: str, raw_source_url:
         seen_urls.add(url)
         candidates.append(
             {
-                "provider": "public",
+                "provider": "public_linkedin",
                 "query": query,
                 "profile_url": url,
                 "name": "",
@@ -170,7 +188,64 @@ def _extract_candidates_from_markdown(markdown: str, query: str, raw_source_url:
     return candidates
 
 
-async def _run_public_provider(queries: list[str]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _is_fallback_candidate_url(url: str) -> bool:
+    host = urlparse(url).netloc.lower()
+    if not host:
+        return False
+    return (
+        host.endswith(".illinois.edu")
+        or host == "illinois.edu"
+        or host == "github.com"
+        or host == "scholar.google.com"
+        or host == "sites.google.com"
+    )
+
+
+def _extract_fallback_candidates_from_markdown(markdown: str, query: str, raw_source_url: str) -> list[dict[str, Any]]:
+    path_tags = _path_tags_from_query(query)
+    candidates: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+
+    for match in MARKDOWN_LINK_RE.finditer(markdown):
+        url = match.group("url")
+        if url in seen_urls or not _is_fallback_candidate_url(url):
+            continue
+        seen_urls.add(url)
+        label = match.group("label").strip()
+        combined = f"{label} {query}".strip()
+        confidence = _candidate_confidence(
+            {
+                "name": label,
+                "headline": label,
+                "snippet": combined,
+                "path_tags": path_tags,
+            }
+        )
+        if confidence < 0.6:
+            continue
+        candidates.append(
+            {
+                "provider": "fallback_public",
+                "query": query,
+                "profile_url": url,
+                "name": label.split(" | ")[0].split(" - ")[0].strip(),
+                "headline": label,
+                "snippet": combined,
+                "discovered_at": _now_iso(),
+                "path_tags": path_tags,
+                "confidence": confidence,
+                "raw_source_url": raw_source_url,
+            }
+        )
+
+    return candidates
+
+
+async def _run_search_provider(
+    provider_name: str,
+    queries: list[str],
+    extractor: Any,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     async def fetch_query(
         client: httpx.AsyncClient,
         semaphore: asyncio.Semaphore,
@@ -187,7 +262,7 @@ async def _run_public_provider(queries: list[str]) -> tuple[list[dict[str, Any]]
             if response.status_code >= 400 or _blocked_text(text):
                 return query, [], "blocked"
 
-            return query, _extract_candidates_from_markdown(text, query, search_url), "healthy"
+            return query, extractor(text, query, search_url), "healthy"
 
     blocked_queries = 0
     errors = 0
@@ -217,13 +292,21 @@ async def _run_public_provider(queries: list[str]) -> tuple[list[dict[str, Any]]
         status = "rate_limited"
 
     return candidates, {
-        "provider": "public",
+        "provider": provider_name,
         "status": status,
         "queries_run": len(queries),
         "blocked_queries": blocked_queries,
         "errors": errors,
         "candidates_found": len(candidates),
     }
+
+
+async def _run_public_linkedin_provider(queries: list[str]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    return await _run_search_provider("public_linkedin", queries, _extract_candidates_from_markdown)
+
+
+async def _run_fallback_public_provider(queries: list[str]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    return await _run_search_provider("fallback_public", queries, _extract_fallback_candidates_from_markdown)
 
 
 def _browser_assisted_env_path() -> Path | None:
@@ -258,7 +341,13 @@ async def _run_browser_assisted_provider() -> tuple[list[dict[str, Any]], dict[s
             "candidates_found": 0,
         }
 
-    candidates = _load_browser_assisted_candidates(path)
+    candidates = [
+        {
+            "provider": "browser_assisted",
+            **candidate,
+        }
+        for candidate in _load_browser_assisted_candidates(path)
+    ]
     return candidates, {
         "provider": "browser_assisted",
         "status": "healthy",
@@ -335,14 +424,18 @@ def _merge_profiles(existing_profiles: list[dict[str, Any]], new_profiles: list[
 
 
 async def run_alumni_collector(mode: str = "hybrid") -> dict[str, Any]:
-    queries = build_alumni_collector_queries()
+    linkedin_queries = build_alumni_collector_queries()
+    fallback_queries = build_fallback_public_queries()
     provider_statuses: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []
 
     if mode in {"public", "hybrid"}:
-        public_candidates, public_status = await _run_public_provider(queries)
-        candidates.extend(public_candidates)
-        provider_statuses.append(public_status)
+        public_linkedin_candidates, public_linkedin_status = await _run_public_linkedin_provider(linkedin_queries)
+        candidates.extend(public_linkedin_candidates)
+        provider_statuses.append(public_linkedin_status)
+        fallback_candidates, fallback_status = await _run_fallback_public_provider(fallback_queries)
+        candidates.extend(fallback_candidates)
+        provider_statuses.append(fallback_status)
 
     if mode in {"browser_assisted", "hybrid"}:
         browser_candidates, browser_status = await _run_browser_assisted_provider()
@@ -350,6 +443,7 @@ async def run_alumni_collector(mode: str = "hybrid") -> dict[str, Any]:
         provider_statuses.append(browser_status)
 
     promoted_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    promoted_provider_counts: dict[str, int] = {}
     for candidate in candidates:
         promoted = _promote_candidate(candidate)
         if promoted is None:
@@ -358,7 +452,10 @@ async def run_alumni_collector(mode: str = "hybrid") -> dict[str, Any]:
             str(promoted.get("profile_url", "")).lower(),
             str(promoted.get("name", "")).lower(),
         )
-        promoted_by_key.setdefault(key, promoted)
+        if key not in promoted_by_key:
+            promoted_by_key[key] = promoted
+            provider = str(promoted.get("evidence_provider", candidate.get("provider", "fallback_public")) or "fallback_public")
+            promoted_provider_counts[provider] = promoted_provider_counts.get(provider, 0) + 1
 
     promoted_profiles = list(promoted_by_key.values())
     existing_profiles = [
@@ -379,6 +476,11 @@ async def run_alumni_collector(mode: str = "hybrid") -> dict[str, Any]:
         "output_dir": str(_default_auto_output_dir()),
         "merged_profiles_path": str(_default_merged_path()),
         "merged_profiles_total": len(merged_profiles),
+        "provider_queries": {
+            "public_linkedin": len(linkedin_queries),
+            "fallback_public": len(fallback_queries),
+        },
+        "promoted_provider_counts": promoted_provider_counts,
     }
     batch_path = _persist_collector_batch(promoted_profiles, candidates, summary)
     merged_path = _write_merged_profiles(merged_profiles)

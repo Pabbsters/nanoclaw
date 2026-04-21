@@ -52,6 +52,12 @@ PATH_TAG_KEYWORDS: dict[str, tuple[str, ...]] = {
     "quant_fintech": QUANT_KEYWORDS + ("quant researcher", "quant developer"),
 }
 
+EVIDENCE_PROVIDER_STRENGTH: dict[str, int] = {
+    "browser_assisted_linkedin": 3,
+    "public_linkedin": 2,
+    "fallback_public": 1,
+}
+
 
 def _clean_text(value: str | None) -> str:
     return re.sub(r"\s+", " ", (value or "")).strip()
@@ -97,6 +103,16 @@ def _string_list(value: Any) -> list[str]:
 
 def _matched_keywords(text: str, keywords: tuple[str, ...]) -> list[str]:
     return [keyword for keyword in keywords if _contains_keyword(text, keyword)]
+
+
+def _canonical_evidence_provider(record: dict[str, Any], profile_url: str) -> str:
+    source = _clean_text(str(record.get("source") or "")).lower()
+    url = profile_url.lower()
+    if any(token in source for token in ("browser_assisted", "composio", "signed_in", "linkedin_export")):
+        return "browser_assisted_linkedin"
+    if "linkedin" in source or "linkedin.com/in" in url:
+        return "public_linkedin"
+    return "fallback_public"
 
 
 def _infer_path_tags(text: str) -> list[str]:
@@ -287,6 +303,8 @@ def normalize_linkedin_profile_record(record: dict[str, Any]) -> dict[str, Any] 
     if not path_tags and not any(_is_illinois_connected(item) for item in [current_org, *past_orgs, *research_orgs]):
         return None
 
+    evidence_provider = _canonical_evidence_provider(record, profile_url)
+    source_strength = EVIDENCE_PROVIDER_STRENGTH[evidence_provider]
     confidence = float(record.get("confidence") or 0.0)
     if confidence <= 0:
         confidence = min(
@@ -296,6 +314,8 @@ def normalize_linkedin_profile_record(record: dict[str, Any]) -> dict[str, Any] 
             + (0.15 if research_orgs else 0.0)
             + (0.1 if resource_signals else 0.0),
         )
+    if evidence_provider == "browser_assisted_linkedin":
+        confidence = min(0.99, confidence + 0.05)
 
     return {
         "source": str(record.get("source") or "linkedin_assisted"),
@@ -310,6 +330,8 @@ def normalize_linkedin_profile_record(record: dict[str, Any]) -> dict[str, Any] 
         "skills": skills,
         "resource_signals": resource_signals,
         "path_tags": path_tags,
+        "evidence_provider": evidence_provider,
+        "source_strength": source_strength,
         "confidence": round(confidence, 2),
     }
 
@@ -325,6 +347,8 @@ def build_alumni_patterns(profiles: list[dict[str, Any]]) -> list[dict[str, Any]
             "headline": profile.get("headline", ""),
         }
         profile_tags = set(profile.get("path_tags", []))
+        evidence_provider = str(profile.get("evidence_provider", "public_linkedin") or "public_linkedin")
+        source_strength = int(profile.get("source_strength", EVIDENCE_PROVIDER_STRENGTH.get(evidence_provider, 1)) or 1)
 
         signals: list[dict[str, Any]] = []
         signals.extend(profile.get("resource_signals", []))
@@ -365,12 +389,19 @@ def build_alumni_patterns(profiles: list[dict[str, Any]]) -> list[dict[str, Any]
                     "recommended_action": "track",
                     "score": 0,
                     "illinois_connected": _is_illinois_connected(entity_name),
+                    "provider_counts": {},
+                    "weighted_evidence": 0,
+                    "linkedin_backing_count": 0,
                 },
             )
 
             if not any(sample["profile_url"] == profile_ref["profile_url"] and sample["name"] == profile_ref["name"] for sample in aggregate["sample_profiles"]):
                 aggregate["sample_profiles"].append(profile_ref)
                 aggregate["evidence_count"] += 1
+                aggregate["weighted_evidence"] += source_strength
+                aggregate["provider_counts"][evidence_provider] = int(aggregate["provider_counts"].get(evidence_provider, 0) or 0) + 1
+                if evidence_provider in {"browser_assisted_linkedin", "public_linkedin"}:
+                    aggregate["linkedin_backing_count"] += 1
 
             if _entity_type_rank(entity_type) > _entity_type_rank(aggregate["entity_type"]):
                 aggregate["entity_type"] = entity_type
@@ -382,15 +413,31 @@ def build_alumni_patterns(profiles: list[dict[str, Any]]) -> list[dict[str, Any]
     patterns: list[dict[str, Any]] = []
     for aggregate in aggregates.values():
         path_tags = sorted(aggregate["path_tags"])
-        score = aggregate["evidence_count"] * 12 + min(12, len(path_tags) * 4)
+        provider_counts = dict(aggregate["provider_counts"])
+        fallback_evidence_count = sum(
+            count for provider, count in provider_counts.items()
+            if provider == "fallback_public"
+        )
+        score = aggregate["evidence_count"] * 10 + min(12, len(path_tags) * 4)
         if aggregate["entity_type"] in {"professor", "lab", "center", "program", "resource"}:
             score += 6
         if aggregate["illinois_connected"]:
             score += 8
+        score += min(12, int(aggregate["weighted_evidence"]))
+        if aggregate["linkedin_backing_count"]:
+            score += min(8, aggregate["linkedin_backing_count"] * 2)
 
         fit_reasons: list[str] = []
         if aggregate["illinois_connected"]:
             fit_reasons.append(f"Repeated across UIUC profiles as an Illinois resource or stepping stone ({aggregate['evidence_count']} profiles).")
+        if aggregate["linkedin_backing_count"]:
+            fit_reasons.append(
+                f"LinkedIn-backed across {aggregate['linkedin_backing_count']} UIUC profiles, so this looks like a real observed path rather than a weak web-only signal."
+            )
+        elif fallback_evidence_count:
+            fit_reasons.append(
+                f"Supported by fallback public evidence across {fallback_evidence_count} UIUC-linked profiles/resources while LinkedIn evidence is limited."
+            )
         if "ml_ai_research" in path_tags:
             fit_reasons.extend(VAULT_PROFILE_SIGNALS["ml_ai_research"][:1])
         if "quant_fintech" in path_tags:
@@ -415,6 +462,11 @@ def build_alumni_patterns(profiles: list[dict[str, Any]]) -> list[dict[str, Any]
                 "recommended_action": recommended_action,
                 "score": score,
                 "illinois_connected": aggregate["illinois_connected"],
+                "evidence_providers": sorted(provider_counts),
+                "provider_counts": provider_counts,
+                "linkedin_backing_count": aggregate["linkedin_backing_count"],
+                "fallback_evidence_count": fallback_evidence_count,
+                "source_strength": aggregate["weighted_evidence"],
             }
         )
 
@@ -463,6 +515,9 @@ def build_source_records_from_alumni_patterns(patterns: list[dict[str, Any]]) ->
                 "alumni_evidence_count": pattern.get("evidence_count", 0),
                 "alumni_patterns": [entity_name],
                 "evidence_sources": ["alumni"],
+                "alumni_evidence_providers": pattern.get("evidence_providers", []),
+                "alumni_source_strength": int(pattern.get("source_strength", 0) or 0),
+                "linkedin_backing_count": int(pattern.get("linkedin_backing_count", 0) or 0),
             }
         )
 
@@ -534,12 +589,24 @@ def apply_alumni_feedback(opportunities: list[dict[str, Any]], patterns: list[di
         matched_patterns = [pattern for pattern in patterns if _pattern_matches_opportunity(opportunity, pattern)]
         alumni_evidence_count = sum(pattern.get("evidence_count", 0) for pattern in matched_patterns)
         matched_path_tags = {tag for pattern in matched_patterns for tag in pattern.get("path_tags", [])}
+        matched_provider_counts: dict[str, int] = {}
+        linkedin_backing_count = 0
+        alumni_source_strength = 0
+        for pattern in matched_patterns:
+            linkedin_backing_count += int(pattern.get("linkedin_backing_count", 0) or 0)
+            alumni_source_strength += int(pattern.get("source_strength", 0) or 0)
+            for provider, count in dict(pattern.get("provider_counts", {})).items():
+                matched_provider_counts[provider] = matched_provider_counts.get(provider, 0) + int(count or 0)
 
         score_components = dict(opportunity.get("score_components", {}))
-        score_components["alumni_signal_strength"] = min(18, alumni_evidence_count * 3)
+        score_components["alumni_signal_strength"] = min(
+            18,
+            alumni_evidence_count * 2 + linkedin_backing_count + min(4, alumni_source_strength // 3),
+        )
         score_components["trajectory_similarity"] = min(
             12,
-            (4 if opportunity.get("track") in matched_path_tags else 0)
+            (6 if opportunity.get("track") in matched_path_tags and linkedin_backing_count else 0)
+            + (4 if opportunity.get("track") in matched_path_tags and not linkedin_backing_count else 0)
             + min(8, len(matched_patterns) * 2),
         )
         score_components["resource_leverage_fit"] = min(
@@ -554,9 +621,14 @@ def apply_alumni_feedback(opportunities: list[dict[str, Any]], patterns: list[di
 
         fit_reasons = list(opportunity.get("fit_reasons", []))
         if matched_patterns:
-            fit_reasons.append(
-                f"Repeated across {alumni_evidence_count} UIUC student/alumni profiles via {', '.join(pattern['entity_name'] for pattern in matched_patterns[:3])}."
-            )
+            if linkedin_backing_count:
+                fit_reasons.append(
+                    f"LinkedIn-backed across {linkedin_backing_count} UIUC student/alumni profiles via {', '.join(pattern['entity_name'] for pattern in matched_patterns[:3])}."
+                )
+            else:
+                fit_reasons.append(
+                    f"Supported by fallback public UIUC evidence via {', '.join(pattern['entity_name'] for pattern in matched_patterns[:3])}."
+                )
             if any(pattern.get("entity_type") in {"center", "program", "resource"} for pattern in matched_patterns):
                 fit_reasons.append("Illinois resource usage suggests this is a realistic stepping stone, not just a prestige match.")
 
@@ -571,6 +643,9 @@ def apply_alumni_feedback(opportunities: list[dict[str, Any]], patterns: list[di
             "evidence_sources": evidence_sources,
             "alumni_patterns": alumni_patterns,
             "alumni_evidence_count": alumni_evidence_count,
+            "alumni_evidence_providers": sorted(matched_provider_counts),
+            "alumni_source_strength": alumni_source_strength,
+            "linkedin_backing_count": linkedin_backing_count,
         }
         updated["should_ping"] = (
             updated["total_score"] >= 95

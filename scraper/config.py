@@ -208,6 +208,14 @@ TIER1_SOURCE_PREFERENCES: dict[str, dict[str, str]] = {
     "tesla": {"preferred_source": "workday_api", "source_type": "direct"},
 }
 
+DIRECT_SOURCE_ALERT_POLICIES: dict[str, dict[str, str | bool]] = {
+    "tesla": {
+        "alerting_enabled": False,
+        "status": "degraded",
+        "reason": "workday_api path is currently unverified in live runs; keep Tesla tracked but disable alerting until the adapter is recovered.",
+    },
+}
+
 # ── Company board sources ──────────────────────────────────────────────
 GREENHOUSE_COMPANIES: list[dict[str, str]] = [
     {"slug": "anthropic", "name": "Anthropic"},
@@ -303,12 +311,38 @@ def build_coverage_report() -> dict[str, object]:
     source_family_counts: dict[str, int] = {}
     for source in preferred_source_by_company.values():
         source_family_counts[source] = source_family_counts.get(source, 0) + 1
+    alert_policy_by_company = {
+        slug: get_direct_source_alert_policy(slug)
+        for slug in covered
+    }
     return {
         "covered_companies": covered,
         "uncovered_companies": uncovered,
         "preferred_source_by_company": preferred_source_by_company,
         "source_family_counts": source_family_counts,
+        "alert_policy_by_company": alert_policy_by_company,
     }
+
+
+def get_direct_source_alert_policy(company_slug: str) -> dict[str, str | bool]:
+    preference = TIER1_SOURCE_PREFERENCES.get(company_slug, {})
+    source = str(preference.get("preferred_source", "") or "")
+    default_policy: dict[str, str | bool] = {
+        "tracked": company_slug in TARGET_COMPANY_SLUGS,
+        "preferred_source": source,
+        "source_type": str(preference.get("source_type", "") or ""),
+        "alerting_enabled": True,
+        "status": "healthy" if source else "unknown",
+        "reason": "",
+    }
+    override = DIRECT_SOURCE_ALERT_POLICIES.get(company_slug)
+    if override:
+        default_policy.update(override)
+    return default_policy
+
+
+def is_direct_source_alerting_enabled(company_slug: str) -> bool:
+    return bool(get_direct_source_alert_policy(company_slug).get("alerting_enabled", True))
 
 # ── Intern / entry-level title patterns for bachelor-level intent ─────
 INTERN_TITLE_PATTERNS: list[str] = [
