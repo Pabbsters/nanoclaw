@@ -10,6 +10,10 @@ mkdir -p "$VAULT_BASE/companies"
 mkdir -p "$VAULT_BASE/newsletters"
 mkdir -p "$VAULT_BASE/intel"
 mkdir -p "$VAULT_BASE/scraper-feed"
+mkdir -p "$VAULT_BASE/uiuc-scout/openings"
+mkdir -p "$VAULT_BASE/uiuc-scout/labs"
+mkdir -p "$VAULT_BASE/uiuc-scout/outreach"
+mkdir -p "$VAULT_BASE/uiuc-scout/quant"
 
 # Create initial placeholder files if they don't exist
 [ -f "$VAULT_BASE/companies/fortune-500-master.md" ] || cat > "$VAULT_BASE/companies/fortune-500-master.md" << 'EOF'
@@ -57,6 +61,18 @@ EOF
 **Last updated**: (will be updated by jojo weekly task)
 
 *This file is auto-updated by jojo's weekly knowledge base task.*
+EOF
+
+[ -f "$VAULT_BASE/uiuc-scout/queue.md" ] || cat > "$VAULT_BASE/uiuc-scout/queue.md" << 'EOF'
+# UIUC Scout Queue
+
+This file is auto-updated by the UIUC scout pipeline.
+EOF
+
+[ -f "$VAULT_BASE/uiuc-scout/sources.md" ] || cat > "$VAULT_BASE/uiuc-scout/sources.md" << 'EOF'
+# UIUC Scout Sources
+
+This file is auto-updated by the UIUC scout pipeline.
 EOF
 
 echo "Vault structure created at $VAULT_BASE"

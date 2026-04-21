@@ -6,7 +6,7 @@ import re
 
 import httpx
 
-from config import INTERN_TITLE_PATTERNS, LEVER_COMPANIES
+from config import ALERT_TITLE_PATTERNS, LEVER_COMPANIES
 
 LEVER_API = "https://api.lever.co/v0/postings/{slug}?mode=json"
 
@@ -14,7 +14,7 @@ LEVER_API = "https://api.lever.co/v0/postings/{slug}?mode=json"
 def is_intern_posting(title: str) -> bool:
     """Check if title matches any intern pattern."""
     title_lower = title.lower()
-    return any(re.search(p, title_lower) for p in INTERN_TITLE_PATTERNS)
+    return any(re.search(p, title_lower) for p in ALERT_TITLE_PATTERNS)
 
 
 def parse_lever_jobs(

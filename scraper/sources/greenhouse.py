@@ -6,7 +6,7 @@ import re
 
 import httpx
 
-from config import GREENHOUSE_COMPANIES, INTERN_TITLE_PATTERNS
+from config import ALERT_TITLE_PATTERNS, GREENHOUSE_COMPANIES
 
 GREENHOUSE_API = "https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
 
@@ -14,7 +14,7 @@ GREENHOUSE_API = "https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content
 def is_intern_posting(title: str) -> bool:
     """Check if title matches any intern pattern."""
     title_lower = title.lower()
-    return any(re.search(p, title_lower) for p in INTERN_TITLE_PATTERNS)
+    return any(re.search(p, title_lower) for p in ALERT_TITLE_PATTERNS)
 
 
 def parse_greenhouse_jobs(
@@ -40,6 +40,7 @@ def parse_greenhouse_jobs(
 
         location_obj = job.get("location", {})
         location = location_obj.get("name", "") if location_obj else ""
+        posted_at = str(job.get("first_published", "") or job.get("updated_at", "")).strip()
 
         results.append({
             "posting_id": str(job.get("id", "")),
@@ -50,6 +51,7 @@ def parse_greenhouse_jobs(
             "team": team,
             "skills": skills,
             "location": location,
+            "posted_at": posted_at,
         })
 
     return results

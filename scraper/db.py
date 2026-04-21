@@ -193,6 +193,13 @@ class PostingDB:
         )
         return [self._deserialize_uiuc_row(dict(row)) for row in cursor.fetchall()]
 
+    def get_all_uiuc(self) -> list[dict]:
+        """Return the full current UIUC snapshot, newest first."""
+        cursor = self._conn.execute(
+            "SELECT * FROM uiuc_opportunities ORDER BY seen_at DESC"
+        )
+        return [self._deserialize_uiuc_row(dict(row)) for row in cursor.fetchall()]
+
     def get_uiuc_feed_since(self, since_ts: float) -> list[dict]:
         """Return all UIUC opportunities seen after *since_ts*."""
         cursor = self._conn.execute(

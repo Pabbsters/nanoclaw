@@ -6,7 +6,7 @@ import re
 
 import httpx
 
-from config import ASHBY_COMPANIES, INTERN_TITLE_PATTERNS
+from config import ALERT_TITLE_PATTERNS, ASHBY_COMPANIES
 
 ASHBY_API = "https://api.ashbyhq.com/posting-api/job-board/{slug}"
 
@@ -14,7 +14,7 @@ ASHBY_API = "https://api.ashbyhq.com/posting-api/job-board/{slug}"
 def is_intern_posting(title: str) -> bool:
     """Check if title matches any intern pattern."""
     title_lower = title.lower()
-    return any(re.search(p, title_lower) for p in INTERN_TITLE_PATTERNS)
+    return any(re.search(p, title_lower) for p in ALERT_TITLE_PATTERNS)
 
 
 def parse_ashby_jobs(
@@ -46,6 +46,7 @@ def parse_ashby_jobs(
         skills = description[:200].strip() if description else ""
 
         posting_url = job.get("hostedUrl", "") or job.get("jobUrl", "")
+        posted_at = str(job.get("publishedAt", "")).strip()
 
         results.append({
             "posting_id": str(job.get("id", "")),
@@ -56,6 +57,7 @@ def parse_ashby_jobs(
             "team": team,
             "skills": skills,
             "location": location if isinstance(location, str) else "",
+            "posted_at": posted_at,
         })
 
     return results

@@ -262,6 +262,40 @@ class TestUiucScoutPersistence:
         assert len(rows) == 1
         assert rows[0]["id"] == "quant-lab"
 
+    def test_get_all_uiuc_returns_snapshot(self, db):
+        opportunity = {
+            "id": "bo-li-lab",
+            "title": "Bo Li",
+            "url": "https://example.com/bo-li",
+            "type": "cold_outreach_target",
+            "track": "ml_ai_research",
+            "org": "UIUC",
+            "department": "CS",
+            "lab": "Trustworthy AI Lab",
+            "faculty_name": "Bo Li",
+            "status": "rolling",
+            "next_action": "reach_out",
+            "total_score": 81,
+            "company_archetypes": ["Anthropic"],
+            "skills": ["machine learning"],
+            "tags": ["trustworthy ai"],
+            "fit_reasons": ["Matches trustworthy AI interest"],
+            "score_components": {"path_fit": 18},
+            "contact_info": {"email": "lbo@illinois.edu"},
+            "description": "Research on trustworthy AI.",
+            "evidence_sources": ["official"],
+            "alumni_patterns": [],
+            "alumni_evidence_count": 0,
+            "should_ping": False,
+        }
+
+        db.mark_uiuc_seen("uiuc_seed", opportunity)
+
+        rows = db.get_all_uiuc()
+
+        assert len(rows) == 1
+        assert rows[0]["id"] == "bo-li-lab"
+
     def test_refresh_uiuc_snapshot_prunes_stale_rows_and_preserves_existing_seen_at(self, db):
         existing = {
             "id": "bo-li-lab",

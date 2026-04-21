@@ -39,6 +39,7 @@ TRACK_EMOJI: dict[str, str] = {
 TRACK_KEYWORDS: dict[str, list[str]] = {
     "ai_data": [
         "ai engineer", "ml engineer", "machine learning", "data engineer",
+        "data engineering",
         "data scientist", "nlp engineer", "mlops", "computer vision",
         "research engineer", "research scientist", "applied scientist",
         "data science", "deep learning", "artificial intelligence",
@@ -202,6 +203,9 @@ TIER1_SOURCE_PREFERENCES: dict[str, dict[str, str]] = {
     "millennium": {"preferred_source": "smartrecruiters", "source_type": "direct"},
     "netflix": {"preferred_source": "netflix", "source_type": "direct"},
     "salesforce": {"preferred_source": "workday", "source_type": "direct"},
+    "uber": {"preferred_source": "smartrecruiters", "source_type": "direct"},
+    "doordash": {"preferred_source": "smartrecruiters", "source_type": "direct"},
+    "tesla": {"preferred_source": "workday_api", "source_type": "direct"},
 }
 
 # ── Company board sources ──────────────────────────────────────────────
@@ -272,6 +276,7 @@ DIRECT_ALERT_SOURCES: set[str] = {
     "amazon",
     "apple",
     "workday",
+    "workday_api",
     "google",
     "talentbrew",
     "airbnb",
@@ -309,7 +314,11 @@ def build_coverage_report() -> dict[str, object]:
 INTERN_TITLE_PATTERNS: list[str] = [
     r"\bintern\b",
     r"\binternship\b",
+    r"\bco-op\b",
+    r"\bcoop\b",
+    r"\bcooperative education\b",
     r"\bfellow\b",
+    r"\bfellowship\b",
     r"\bresidency\b",
     r"\bapprentice\b",
     r"\bnew grad\b",
@@ -325,8 +334,6 @@ INTERN_TITLE_PATTERNS: list[str] = [
 # ── Alertable employment/title vocabulary ──────────────────────────────
 ALERT_TITLE_PATTERNS: list[str] = [
     *INTERN_TITLE_PATTERNS,
-    r"\bco-op\b",
-    r"\bcoop\b",
     r"\bfellow\b",
     r"\bresidency\b",
     r"\bapprentice\b",
@@ -364,9 +371,6 @@ SEASONAL_CONTRACT_TITLE_TERMS: list[str] = [
 # ── Title/description patterns that disqualify a posting ──────────────
 # These are roles above bachelor's level or requiring advanced degrees.
 EXCLUDE_PATTERNS: list[str] = [
-    r"\bco[- ]?op\b",
-    r"\bcoop\b",
-    r"\bcooperative education\b",
     r"\bphd\b",
     r"\bph\.d\b",
     r"\bdoctoral\b",
@@ -472,4 +476,5 @@ POLL_INTERVAL_MINUTES: dict[str, int] = {
     "airbnb": _int_env("POLL_AIRBNB_MINUTES", 30),
     "smartrecruiters": _int_env("POLL_SMARTRECRUITERS_MINUTES", 30),
     "netflix": _int_env("POLL_NETFLIX_MINUTES", 30),
+    "workday_api": _int_env("POLL_WORKDAY_API_MINUTES", 60),
 }

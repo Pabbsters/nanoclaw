@@ -16,7 +16,9 @@ SEARCH_QUERIES: list[str] = [
     "quant intern",
 ]
 
-SITES: list[str] = ["indeed", "linkedin", "glassdoor", "google", "zip_recruiter"]
+# Glassdoor requires Playwright — excluded for container compatibility.
+# LinkedIn uses linkedin_fetch_description=False so no Playwright needed.
+SITES: list[str] = ["indeed", "linkedin", "google", "zip_recruiter"]
 
 
 def _normalize_row(row: dict) -> dict:
@@ -50,6 +52,7 @@ def poll_jobspy() -> list[dict]:
                 location="United States",
                 results_wanted=30,
                 hours_old=24,
+                linkedin_fetch_description=False,
             )
             for _, row in jobs_df.iterrows():
                 all_jobs.append(_normalize_row(row.to_dict()))

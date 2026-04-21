@@ -19,12 +19,12 @@ class TestClassifyPosting:
         assert result["priority"] == 0
 
     def test_swe_title_match(self):
-        result = classify_posting("Software Engineer - Backend")
+        result = classify_posting("Software Engineer Intern - Backend")
         assert result is not None
         assert result["track"] == "swe"
 
     def test_sales_technical_match(self):
-        result = classify_posting("Solutions Architect - Enterprise")
+        result = classify_posting("Solutions Architect New Grad - Enterprise")
         assert result is not None
         assert result["track"] == "sales_technical"
 
@@ -34,12 +34,12 @@ class TestClassifyPosting:
         assert result["track"] == "consulting"
 
     def test_extras_match(self):
-        result = classify_posting("Quantitative Developer - Trading")
+        result = classify_posting("Quantitative Developer Intern - Trading")
         assert result is not None
         assert result["track"] == "extras"
 
     def test_cloud_infra_match(self):
-        result = classify_posting("Site Reliability Engineer")
+        result = classify_posting("Site Reliability Engineer Internship")
         assert result is not None
         assert result["track"] == "cloud_infra"
 
@@ -60,7 +60,7 @@ class TestPriorityOrdering:
     def test_ai_data_beats_swe(self):
         # "data engineer" is ai_data (priority 0), description mentions software
         result = classify_posting(
-            "Data Engineer",
+            "Data Engineer Internship",
             description="software engineer background preferred",
         )
         assert result is not None
@@ -68,7 +68,7 @@ class TestPriorityOrdering:
         assert result["priority"] == 0
 
     def test_priority_value_is_index(self):
-        result = classify_posting("DevOps Engineer")
+        result = classify_posting("DevOps Engineer Residency")
         assert result is not None
         assert result["track"] == "cloud_infra"
         assert result["priority"] == 5
@@ -79,7 +79,7 @@ class TestPriorityOrdering:
 class TestCaseInsensitivity:
 
     def test_uppercase_title(self):
-        result = classify_posting("MACHINE LEARNING ENGINEER")
+        result = classify_posting("MACHINE LEARNING ENGINEER INTERN")
         assert result is not None
         assert result["track"] == "ai_data"
 
@@ -95,7 +95,7 @@ class TestDescriptionMatching:
 
     def test_keyword_in_description_only(self):
         result = classify_posting(
-            "Junior Role - Open Position",
+            "Early Career Role - Open Position",
             description="Looking for a data scientist with Python experience",
         )
         assert result is not None
@@ -116,7 +116,7 @@ class TestWordBoundary:
         assert result is None
 
     def test_sre_matches_as_whole_word(self):
-        result = classify_posting("SRE - Production Systems")
+        result = classify_posting("SRE Residency - Production Systems")
         assert result is not None
         assert result["track"] == "cloud_infra"
 
@@ -131,15 +131,34 @@ class TestWordBoundary:
 class TestMatchedKeyword:
 
     def test_returns_matched_keyword(self):
-        result = classify_posting("Senior ML Engineer - NLP Team")
+        result = classify_posting("ML Engineer Intern - NLP Team")
         assert result is not None
         assert result["matched_keyword"] == "ml engineer"
 
     def test_returns_first_matching_keyword_for_track(self):
-        result = classify_posting("Deep Learning Research Scientist")
+        result = classify_posting("Deep Learning Research Scientist Fellowship")
         assert result is not None
         assert result["track"] == "ai_data"
         # Should match one of the ai_data keywords
         assert result["matched_keyword"] in [
             "deep learning", "research scientist",
         ]
+
+
+class TestBachelorLevelGuardrails:
+
+    def test_rejects_senior_roles_even_if_keyword_matches(self):
+        result = classify_posting("Senior ML Engineer - NLP Team")
+        assert result is None
+
+    def test_rejects_phd_roles(self):
+        result = classify_posting(
+            "Research Scientist Intern",
+            description="PhD required in machine learning or statistics",
+        )
+        assert result is None
+
+    def test_allows_coop_titles(self):
+        result = classify_posting("Data Engineering Co-op")
+        assert result is not None
+        assert result["track"] == "ai_data"
