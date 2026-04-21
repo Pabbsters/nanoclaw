@@ -349,6 +349,35 @@ class TestSendAlertWebhook:
         assert mock_post.await_args.args[0] == "https://discord.example/webhook"
 
     @pytest.mark.asyncio
+    async def test_send_alert_retries_after_rate_limit(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.example/webhook")
+
+        rate_limited = MagicMock()
+        rate_limited.status_code = 429
+        rate_limited.headers = {}
+        rate_limited.json.return_value = {"retry_after": 0}
+
+        success = MagicMock()
+        success.status_code = 204
+        success.raise_for_status.return_value = None
+
+        with (
+            patch("discord_alert.httpx.AsyncClient.post", new=AsyncMock(side_effect=[rate_limited, success])) as mock_post,
+            patch("discord_alert.asyncio.sleep", new=AsyncMock()) as mock_sleep,
+        ):
+            await send_alert(
+                {
+                    "title": "ML Engineer Intern",
+                    "company_name": "Anthropic",
+                    "url": "https://example.com/job/42",
+                    "track": "ai_data",
+                }
+            )
+
+        assert mock_post.await_count == 2
+        assert mock_sleep.await_count == 1
+
+    @pytest.mark.asyncio
     async def test_send_uiuc_alert_prefers_webhook_when_present(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.example/webhook")
         monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-bot-token")

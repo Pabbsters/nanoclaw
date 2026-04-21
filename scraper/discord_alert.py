@@ -108,8 +108,7 @@ async def send_alert(posting: dict) -> None:
 
     message = format_alert(posting)
     async with httpx.AsyncClient(timeout=15) as client:
-        response = await client.post(webhook_url, json={"content": message})
-        response.raise_for_status()
+        await _post_discord_message(client, webhook_url, {"content": message})
 
 
 async def send_batch_alerts(postings: list[dict]) -> None:
